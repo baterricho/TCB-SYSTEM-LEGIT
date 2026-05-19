@@ -1,71 +1,102 @@
-"""
-Marketplace and Interest Request models.
-Only certified IP applications can be published to the marketplace.
-Public users can view abstracts and send interest requests.
-"""
-
 import uuid
+
+from django.conf import settings
 from django.db import models
-from django.utils import timezone
 
 
-class MarketplaceItem(models.Model):
-    """
-    Public marketplace listing for certified IP applications.
-    Only exposes non-confidential information (title + abstract).
-    Documents are NEVER exposed through the marketplace.
-    """
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    application = models.OneToOneField(
-        "applications.IPApplication",
-        on_delete=models.CASCADE,
-        related_name="marketplace_item",
-    )
-    title = models.CharField(max_length=500)
-    abstract = models.TextField()
-    is_public = models.BooleanField(default=False)
-    is_archived = models.BooleanField(default=False)
-    archived_at = models.DateTimeField(null=True, blank=True)
+class IPRecord(models.Model):
+    id = models.BigAutoField(primary_key=True, db_column="record_id")
+    case = models.OneToOneField("cases.Case", on_delete=models.PROTECT, related_name="ip_record", db_column="case_id")
+    application = models.ForeignKey("applications.IPApplication", on_delete=models.PROTECT, related_name="ip_records", db_column="application_id")
+    encryption_key = models.ForeignKey("security_keys.EncryptionKey", on_delete=models.SET_NULL, null=True, blank=True, related_name="ip_records", db_column="encryption_key_id")
+    certification_date = models.DateField(null=True, blank=True)
+    is_certified = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        db_table = "ip_record"
+        ordering = ("-certification_date", "-created_at")
         indexes = [
-            models.Index(fields=["is_public", "is_archived", "-created_at"]),
+            models.Index(fields=["case"]),
+            models.Index(fields=["application"]),
+            models.Index(fields=["is_certified"]),
         ]
 
     def __str__(self):
-        visibility = "Public" if self.is_public else "Private"
-        return f"[{visibility}] {self.title}"
-
-    def archive(self):
-        self.is_archived = True
-        self.archived_at = timezone.now()
-        self.is_public = False
-        self.save(update_fields=["is_archived", "archived_at", "is_public", "updated_at"])
+        return f"Record for {self.case.case_number}"
 
 
-class InterestRequest(models.Model):
-    """
-    Interest requests from external stakeholders.
-    No authentication required — public users can express interest.
-    """
+class MarketListing(models.Model):
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft"
+        PUBLISHED = "published", "Published"
+        ARCHIVED = "archived", "Archived"
 
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    marketplace_item = models.ForeignKey(
-        MarketplaceItem,
-        on_delete=models.CASCADE,
-        related_name="interest_requests",
-    )
-    requester_name = models.CharField(max_length=255)
-    requester_email = models.EmailField()
-    message = models.TextField()
+    id = models.BigAutoField(primary_key=True, db_column="listing_id")
+    listing_code = models.CharField(max_length=50, unique=True, editable=False)
+    record = models.ForeignKey(IPRecord, on_delete=models.PROTECT, related_name="market_listings", db_column="record_id")
+    admin = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="market_listings", db_column="admin_id")
+    title = models.CharField(max_length=255)
+    ip_type = models.CharField(max_length=30)
+    inventor_name = models.CharField(max_length=255)
+    short_description = models.TextField()
+    full_description = models.TextField()
+    category = models.CharField(max_length=150)
+    availability_status = models.CharField(max_length=100)
+    image = models.ImageField(upload_to="marketplace/", null=True, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT)
+    is_active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "market_listing"
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["listing_code"]),
+            models.Index(fields=["record"]),
+            models.Index(fields=["admin"]),
+            models.Index(fields=["ip_type"]),
+            models.Index(fields=["status", "is_active"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        if not self.listing_code:
+            self.listing_code = f"LST-{uuid.uuid4().hex[:12].upper()}"
+        super().save(*args, **kwargs)
+
+    @property
+    def listing_id(self):
+        return self.listing_code
+
+    @property
+    def created_by(self):
+        return self.admin
+
+    def __str__(self):
+        return self.title
+
+
+class Bookmark(models.Model):
+    id = models.BigAutoField(primary_key=True, db_column="bookmark_id")
+    applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="bookmarks", db_column="applicant_id")
+    listing = models.ForeignKey(MarketListing, on_delete=models.CASCADE, related_name="bookmarks", db_column="listing_id")
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ["-created_at"]
+        db_table = "bookmark"
+        constraints = [
+            models.UniqueConstraint(fields=["applicant", "listing"], name="unique_applicant_market_listing_bookmark"),
+        ]
+        ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["applicant"]),
+            models.Index(fields=["listing"]),
+        ]
 
     def __str__(self):
-        return f"Interest from {self.requester_name} for '{self.marketplace_item.title}'"
+        return f"{self.applicant.email} - {self.listing.title}"
+
+
+MarketplaceListing = MarketListing

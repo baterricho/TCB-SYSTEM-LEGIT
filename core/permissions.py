@@ -1,83 +1,65 @@
-"""
-Shared permission classes for RBAC enforcement.
-Applied across all API endpoints.
-"""
-
-from rest_framework.permissions import BasePermission
+from rest_framework import permissions
 
 
-class IsAdmin(BasePermission):
-    """Allows access only to admin users."""
-
+class IsAdmin(permissions.BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == "admin"
-        )
+        user = request.user
+        return bool(user and user.is_authenticated and (user.role == "admin" or user.is_staff or user.is_superuser))
 
 
-class IsEvaluator(BasePermission):
-    """Allows access only to evaluator users."""
-
+class IsApplicant(permissions.BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == "evaluator"
-        )
+        return bool(request.user and request.user.is_authenticated and request.user.role == "applicant")
 
 
-class IsApplicant(BasePermission):
-    """Allows access only to applicant users."""
-
+class IsEvaluator(permissions.BasePermission):
     def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role == "applicant"
-        )
+        return bool(request.user and request.user.is_authenticated and request.user.role == "evaluator")
 
 
-class IsAdminOrEvaluator(BasePermission):
-    """Allows access to admin or evaluator users."""
-
-    def has_permission(self, request, view):
-        return (
-            request.user
-            and request.user.is_authenticated
-            and request.user.role in ("admin", "evaluator")
-        )
-
-
-class IsOwnerOrAdmin(BasePermission):
-    """
-    Object-level permission: allows access if the user is the owner
-    of the object or an admin.
-    """
-
+class IsOwnerApplicant(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.user.role == "admin":
             return True
-        # Check common ownership fields
-        if hasattr(obj, "created_by"):
-            return obj.created_by == request.user
-        if hasattr(obj, "user"):
-            return obj.user == request.user
-        return False
+        applicant = getattr(obj, "applicant", None)
+        if applicant == request.user:
+            return True
+        return getattr(applicant, "user", None) == request.user
 
 
-class IsOwnerOrAdminOrAssignedEvaluator(BasePermission):
-    """
-    Object-level permission for IP applications:
-    owner, admin, or the assigned evaluator can access.
-    """
+class IsCaseEvaluator(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        case = getattr(obj, "case", obj)
+        return bool(case and case.taken_by_id == request.user.id)
 
+
+class IsCaseParticipant(permissions.BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.user.role == "admin":
             return True
-        if hasattr(obj, "created_by") and obj.created_by == request.user:
+        case = getattr(obj, "case", obj)
+        if not case:
+            return False
+        return case.applicant_id == request.user.id or case.taken_by_id == request.user.id
+
+
+class IsAdminOrReadOnly(permissions.BasePermission):
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
             return True
-        if hasattr(obj, "assigned_evaluator") and obj.assigned_evaluator == request.user:
+        return bool(request.user and request.user.is_authenticated and request.user.role == "admin")
+
+
+class CanAccessEncryptedDocument(permissions.BasePermission):
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+        if not user or not user.is_authenticated:
+            return False
+        if user.role == "admin":
             return True
-        return False
+        case = getattr(obj, "case", None)
+        if getattr(obj, "uploaded_by_id", None) == user.id:
+            return True
+        if case and case.applicant_id == user.id:
+            return True
+        return bool(case and case.taken_by_id == user.id)

@@ -1,66 +1,38 @@
-"""
-Serializers for marketplace items and interest requests.
-"""
-
 from rest_framework import serializers
-from .models import MarketplaceItem, InterestRequest
+
+from .models import Bookmark, IPRecord, MarketListing
 
 
-class PublicMarketplaceSerializer(serializers.ModelSerializer):
-    """Public listing serializer — limited fields, no sensitive data."""
+class IPRecordSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = IPRecord
+        fields = ("id", "case", "application", "encryption_key", "certification_date", "is_certified", "created_at", "updated_at")
+        read_only_fields = ("id", "created_at", "updated_at")
 
-    ip_type = serializers.CharField(source="application.ip_type", read_only=True)
-    owner_name = serializers.CharField(source="application.created_by.full_name", read_only=True)
-    contact_email = serializers.EmailField(source="application.created_by.email", read_only=True)
-    co_inventors = serializers.SerializerMethodField()
+
+class MarketplaceListingSerializer(serializers.ModelSerializer):
+    bookmark_count = serializers.IntegerField(read_only=True)
+    created_by = serializers.IntegerField(source="admin_id", read_only=True)
+    listing_id = serializers.CharField(source="listing_code", read_only=True)
 
     class Meta:
-        model = MarketplaceItem
-        fields = [
-            "id", "title", "abstract", "ip_type",
-            "owner_name", "contact_email", "co_inventors", "created_at",
-        ]
+        model = MarketListing
+        fields = (
+            "id", "listing_id", "listing_code", "record", "admin", "title", "ip_type", "inventor_name", "short_description",
+            "full_description", "category", "availability_status", "image", "status", "created_by",
+            "is_active", "created_at", "updated_at", "bookmark_count",
+        )
+        read_only_fields = ("id", "listing_id", "listing_code", "admin", "created_by", "created_at", "updated_at", "bookmark_count")
+
+
+class BookmarkSerializer(serializers.ModelSerializer):
+    listing = MarketplaceListingSerializer(read_only=True)
+
+    class Meta:
+        model = Bookmark
+        fields = ("id", "listing", "created_at")
         read_only_fields = fields
 
-    def get_co_inventors(self, obj):
-        return [coinventor.name for coinventor in obj.application.coinventors.all()]
 
-
-class MarketplaceItemSerializer(serializers.ModelSerializer):
-    """Full serializer for admin/owner management."""
-
-    ip_type = serializers.CharField(source="application.ip_type", read_only=True)
-    applicant_name = serializers.CharField(
-        source="application.created_by.full_name", read_only=True
-    )
-    interest_count = serializers.IntegerField(
-        source="interest_requests.count", read_only=True
-    )
-
-    class Meta:
-        model = MarketplaceItem
-        fields = [
-            "id", "application", "title", "abstract",
-            "is_public", "is_archived", "archived_at",
-            "ip_type", "applicant_name", "interest_count",
-            "created_at", "updated_at",
-        ]
-        read_only_fields = ["id", "archived_at", "created_at", "updated_at"]
-
-
-class PublishToMarketplaceSerializer(serializers.Serializer):
-    """Validates marketplace publish requests."""
-
-    application_id = serializers.UUIDField()
-    title = serializers.CharField(max_length=500)
-    abstract = serializers.CharField()
-    is_public = serializers.BooleanField(default=True)
-
-
-class InterestRequestSerializer(serializers.ModelSerializer):
-    """Serializer for public interest submission."""
-
-    class Meta:
-        model = InterestRequest
-        fields = ["id", "requester_name", "requester_email", "message", "created_at"]
-        read_only_fields = ["id", "created_at"]
+class BookmarkCreateSerializer(serializers.Serializer):
+    listing = serializers.IntegerField()

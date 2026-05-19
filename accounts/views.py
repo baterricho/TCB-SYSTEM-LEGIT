@@ -1,346 +1,156 @@
-"""
-Views for user authentication, registration, profile management,
-OTP email verification, and password reset/change.
-"""
-
-from rest_framework import generics, status
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework_simplejwt.tokens import RefreshToken
-from django.conf import settings
+from django.contrib.auth import password_validation
 from django.shortcuts import get_object_or_404
+from rest_framework import generics, permissions, status, viewsets
+from rest_framework.response import Response
+from rest_framework.views import APIView
+from rest_framework_simplejwt.tokens import RefreshToken, TokenError
 
-from core.frontend import build_frontend_payload, get_frontend_url_for_role
+from core.audit import create_audit_log
 from core.permissions import IsAdmin
-from .models import User, UserProfile, OTPVerification
+
+from .models import CustomUser, OTPCode
 from .serializers import (
-    UserRegistrationSerializer,
-    UserLoginSerializer,
-    UserSerializer,
-    UserListSerializer,
-    UserProfileSerializer,
-    VerifyEmailSerializer,
-    ResendOTPSerializer,
-    ForgotPasswordSerializer,
-    ResetPasswordSerializer,
+    AdminCreateApplicantSerializer,
+    AdminCreateEvaluatorSerializer,
+    ApplicantRegistrationSerializer,
     ChangePasswordSerializer,
+    ForgotPasswordSerializer,
+    LoginSerializer,
+    ResendOTPSerializer,
+    ResetPasswordSerializer,
+    UserSerializer,
+    VerifyOTPSerializer,
 )
+from .services import AuthService, OTPService
 
 
-def _send_otp_email(user, otp):
-    """
-    Helper: logs the OTP to console in development.
-    In production this should send a real email via Django's send_mail.
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    logger.info(
-        f"[OTP] User: {user.email} | Purpose: {otp.purpose} | "
-        f"Code: {otp.otp_code} | Expires: {otp.expires_at}"
-    )
-    # TODO: replace with real email sending for production
-    # from django.core.mail import send_mail
-    # send_mail(subject, message, from_email, [user.email])
-
-
-class RegisterView(generics.CreateAPIView):
-    """
-    POST /api/accounts/register/ — Register a new user.
-    Creates user with is_verified=False and sends a 6-digit OTP to email.
-    User must call /verify-email/ before they can log in.
-    """
-
-    permission_classes = [AllowAny]
-    serializer_class = UserRegistrationSerializer
-
-    def create(self, request, *args, **kwargs):
-        serializer = self.get_serializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.save()
-
-        # Generate and send OTP
-        otp = OTPVerification.create_otp(user=user, purpose="registration")
-        _send_otp_email(user, otp)
-
-        payload = {
-            "message": (
-                "Registration successful. A 6-digit OTP has been sent to your email. "
-                "Please verify your account before logging in."
-            ),
-            "email": user.email,
-            "redirect_url": get_frontend_url_for_role(user.role),
-            "frontend": build_frontend_payload(user.role),
-        }
-        if settings.DEBUG:
-            payload["dev_otp"] = otp.otp_code
-
-        return Response(payload, status=status.HTTP_201_CREATED)
-
-
-class VerifyEmailView(APIView):
-    """
-    POST /api/accounts/verify-email/ — Verify email using OTP after registration.
-    On success: marks user as verified and returns JWT tokens.
-    """
-
-    permission_classes = [AllowAny]
+class RegisterApplicantView(APIView):
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
-        serializer = VerifyEmailSerializer(data=request.data)
+        serializer = ApplicantRegistrationSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        user = AuthService.register_applicant(serializer.validated_data, request)
+        return Response({"detail": "Registration received. Please verify the OTP sent to your email.", "user": UserSerializer(user).data}, status=status.HTTP_201_CREATED)
 
-        user = serializer.validated_data["user"]
-        otp = serializer.validated_data["otp"]
 
-        # Mark OTP as used and verify user
-        otp.is_used = True
-        otp.save()
-        user.is_verified = True
-        user.save()
+class AdminCreateApplicantView(APIView):
+    permission_classes = [IsAdmin]
 
-        refresh = RefreshToken.for_user(user)
+    def post(self, request):
+        serializer = AdminCreateApplicantSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = AuthService.create_user_by_admin(serializer.validated_data, CustomUser.Role.APPLICANT, request.user, request)
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
 
-        from services.audit_service import log_audit
-        log_audit(user=user, action="EMAIL_VERIFIED", entity=f"User:{user.id}")
 
-        return Response(
-            {
-                "message": "Email verified successfully. Welcome to The Creator's Bulwark!",
-                "user": UserSerializer(user).data,
-                "tokens": {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                },
-                "redirect_url": get_frontend_url_for_role(user.role),
-                "frontend": build_frontend_payload(user.role),
-            },
-            status=status.HTTP_200_OK,
+class AdminCreateEvaluatorView(APIView):
+    permission_classes = [IsAdmin]
+
+    def post(self, request):
+        serializer = AdminCreateEvaluatorSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        user = AuthService.create_user_by_admin(serializer.validated_data, CustomUser.Role.EVALUATOR, request.user, request)
+        return Response(UserSerializer(user).data, status=status.HTTP_201_CREATED)
+
+
+class LoginView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = LoginSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        AuthService.request_login_otp(serializer.validated_data["email"], serializer.validated_data["password"], request)
+        return Response({"detail": "OTP sent to your email."})
+
+
+class VerifyOTPView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        serializer = VerifyOTPSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = AuthService.verify_otp_and_issue_tokens(
+            serializer.validated_data["email"],
+            serializer.validated_data["purpose"],
+            serializer.validated_data["otp_code"],
+            request,
         )
+        return Response({"detail": "OTP verified.", **data})
 
 
 class ResendOTPView(APIView):
-    """
-    POST /api/accounts/resend-otp/ — Resend OTP for email verification or password reset.
-    Body: { "email": "...", "purpose": "registration" | "password_reset" }
-    """
-
-    permission_classes = [AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = ResendOTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
+        user = get_object_or_404(CustomUser, email__iexact=serializer.validated_data["email"])
+        OTPService.create_and_send(user, serializer.validated_data["purpose"], request)
+        return Response({"detail": "OTP sent to your email."})
 
-        user = serializer.validated_data["user"]
-        purpose = serializer.validated_data["purpose"]
 
-        otp = OTPVerification.create_otp(user=user, purpose=purpose)
-        _send_otp_email(user, otp)
-
-        payload = {"message": "A new OTP has been sent to your email."}
-        if settings.DEBUG:
-            payload["dev_otp"] = otp.otp_code
-        return Response(payload, status=status.HTTP_200_OK)
+class LogoutView(APIView):
+    def post(self, request):
+        refresh_token = request.data.get("refresh")
+        if not refresh_token:
+            return Response({"detail": "Refresh token is required."}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            RefreshToken(refresh_token).blacklist()
+        except TokenError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        create_audit_log(request, request.user, "auth.logout", request.user.email, "Refresh token blacklisted.")
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ForgotPasswordView(APIView):
-    """
-    POST /api/accounts/forgot-password/ — Initiate password reset.
-    Sends a 6-digit OTP to the registered email address.
-    Body: { "email": "..." }
-    """
-
-    permission_classes = [AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        user = User.objects.get(email=serializer.validated_data["email"])
-        otp = OTPVerification.create_otp(user=user, purpose="password_reset")
-        _send_otp_email(user, otp)
-
-        payload = {
-            "message": (
-                "A password reset OTP has been sent to your email. "
-                "It expires in 10 minutes."
-            )
-        }
-        if settings.DEBUG:
-            payload["dev_otp"] = otp.otp_code
-
-        return Response(payload, status=status.HTTP_200_OK)
+        AuthService.request_password_reset(serializer.validated_data["email"], request)
+        return Response({"detail": "If the account exists, a password reset OTP has been sent."})
 
 
 class ResetPasswordView(APIView):
-    """
-    POST /api/accounts/reset-password/ — Complete password reset.
-    Body: { "email": "...", "otp_code": "123456", "new_password": "...", "new_password_confirm": "..." }
-    """
-
-    permission_classes = [AllowAny]
+    permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
-        user = serializer.validated_data["user"]
-        otp = serializer.validated_data["otp"]
-
-        # Mark OTP used and update password
-        otp.is_used = True
-        otp.save()
-        user.set_password(serializer.validated_data["new_password"])
-        user.save()
-
-        from services.audit_service import log_audit
-        log_audit(user=user, action="PASSWORD_RESET", entity=f"User:{user.id}")
-
-        return Response(
-            {"message": "Password reset successful. You can now log in with your new password."},
-            status=status.HTTP_200_OK,
+        AuthService.reset_password(
+            serializer.validated_data["email"],
+            serializer.validated_data["otp_code"],
+            serializer.validated_data["new_password"],
+            request,
         )
+        return Response({"detail": "Password reset completed."})
 
 
 class ChangePasswordView(APIView):
-    """
-    POST /api/accounts/change-password/ — Authenticated user changes their password.
-    Body: { "current_password": "...", "new_password": "...", "new_password_confirm": "..." }
-    """
-
-    permission_classes = [IsAuthenticated]
-
     def post(self, request):
-        serializer = ChangePasswordSerializer(data=request.data)
+        serializer = ChangePasswordSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
-
-        user = request.user
-        if not user.check_password(serializer.validated_data["current_password"]):
-            return Response(
-                {"error": "Current password is incorrect."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        user.set_password(serializer.validated_data["new_password"])
-        user.save()
-
-        from services.audit_service import log_audit
-        log_audit(user=user, action="CHANGE_PASSWORD", entity=f"User:{user.id}")
-
-        return Response(
-            {"message": "Password changed successfully."},
-            status=status.HTTP_200_OK,
-        )
+        if not request.user.check_password(serializer.validated_data["old_password"]):
+            return Response({"detail": "Old password is incorrect."}, status=status.HTTP_400_BAD_REQUEST)
+        password_validation.validate_password(serializer.validated_data["new_password"], request.user)
+        request.user.set_password(serializer.validated_data["new_password"])
+        request.user.save(update_fields=["password"])
+        create_audit_log(request, request.user, "auth.password_changed", request.user.email, "Password changed by user.")
+        return Response({"detail": "Password changed."})
 
 
-class LoginView(APIView):
-    """POST /api/accounts/login/ — Authenticate and return JWT tokens."""
+class CurrentUserView(generics.RetrieveUpdateAPIView):
+    serializer_class = UserSerializer
 
-    permission_classes = [AllowAny]
-
-    def post(self, request):
-        serializer = UserLoginSerializer(data=request.data)
-        serializer.is_valid(raise_exception=True)
-        user = serializer.validated_data["user"]
-
-        refresh = RefreshToken.for_user(user)
-
-        from services.audit_service import log_audit
-        log_audit(user=user, action="LOGIN", entity=f"User:{user.id}")
-
-        return Response(
-            {
-                "message": "Login successful.",
-                "user": UserSerializer(user).data,
-                "tokens": {
-                    "refresh": str(refresh),
-                    "access": str(refresh.access_token),
-                },
-                "redirect_url": get_frontend_url_for_role(user.role),
-                "frontend": build_frontend_payload(user.role),
-            },
-            status=status.HTTP_200_OK,
-        )
+    def get_object(self):
+        return self.request.user
 
 
-class LogoutView(APIView):
-    """POST /api/accounts/logout/ — Blacklist the refresh token."""
-
-    permission_classes = [IsAuthenticated]
-
-    def post(self, request):
-        try:
-            refresh_token = request.data.get("refresh")
-            if refresh_token:
-                token = RefreshToken(refresh_token)
-                token.blacklist()
-            return Response(
-                {"message": "Logout successful."},
-                status=status.HTTP_200_OK,
-            )
-        except Exception:
-            return Response(
-                {"message": "Logout successful."},
-                status=status.HTTP_200_OK,
-            )
-
-
-class ProfileView(APIView):
-    """
-    GET  /api/accounts/profile/ — Get current user's profile.
-    PUT  /api/accounts/profile/ — Update current user's profile (contact, address, institution).
-    """
-
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        serializer = UserSerializer(request.user)
-        return Response(serializer.data)
-
-    def put(self, request):
-        profile = request.user.profile
-        serializer = UserProfileSerializer(profile, data=request.data, partial=True)
-        serializer.is_valid(raise_exception=True)
-        serializer.save()
-        return Response(UserSerializer(request.user).data)
-
-
-class UserListView(generics.ListAPIView):
-    """GET /api/accounts/users/ — List all users (admin only)."""
-
-    permission_classes = [IsAuthenticated, IsAdmin]
-    serializer_class = UserListSerializer
-    queryset = User.objects.select_related("profile").all()
-    filterset_fields = ["role", "is_verified", "is_active"]
-    search_fields = ["full_name", "email"]
-    ordering_fields = ["created_at", "full_name"]
-
-
-class UserDetailView(APIView):
-    """
-    GET /api/accounts/users/<id>/ — Get user details (admin only).
-    PUT /api/accounts/users/<id>/ — Update user role/status (admin only).
-    """
-
-    permission_classes = [IsAuthenticated, IsAdmin]
-
-    def get(self, request, pk):
-        user = get_object_or_404(User, pk=pk)
-        return Response(UserSerializer(user).data)
-
-    def put(self, request, pk):
-        user = get_object_or_404(User, pk=pk)
-        allowed_fields = {"role", "is_verified", "is_active"}
-        for field, value in request.data.items():
-            if field in allowed_fields:
-                setattr(user, field, value)
-        user.save()
-
-        from services.audit_service import log_audit
-        log_audit(
-            user=request.user,
-            action="UPDATE_USER",
-            entity=f"User:{user.id}",
-        )
-
-        return Response(UserSerializer(user).data)
+class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
+    permission_classes = [IsAdmin]
+    serializer_class = UserSerializer
+    queryset = CustomUser.objects.all().order_by("-created_at")
+    filterset_fields = ("role", "status")
+    search_fields = ("email", "first_name", "middle_name", "last_name")

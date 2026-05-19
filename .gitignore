@@ -1,38 +1,12 @@
-# Python
 __pycache__/
 *.py[cod]
-*.so
-*.egg-info/
-dist/
-build/
-*.egg
-
-# Node
-node_modules/
-
-# Django
+*.sqlite3
 db.sqlite3
-media/
-staticfiles/
-*.log
-
-# Environment
 .env
 venv/
-env/
 .venv/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Local agent tooling
-.agents/
-skills-lock.json
-
-# OS
-.DS_Store
-Thumbs.db
-desktop.ini
+media/
+staticfiles/
+.pytest_cache/
+.coverage
+htmlcov/
