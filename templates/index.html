@@ -1,0 +1,774 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Creator's Bulwark — PSU IP Management System</title>
+  <meta name="description" content="Palawan State University's centralized Intellectual Property Management System for patents, trademarks, copyrights, utility models, and industrial designs." />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800;9..144,900&family=Inter:wght@300;400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
+  <link rel="stylesheet" href="{% static 'css/styles.css' %}?v=8" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <div id="app">
+    <div class="top-alert-banner" id="topAlertBanner" role="status" aria-live="polite">
+      <div class="top-alert-content">
+        <span class="top-alert-label">ALERT</span>
+        <span class="top-alert-message" id="topAlertMessage">Announcement alert available.</span>
+        <button class="top-alert-action" type="button" onclick="showTopAlertAnnouncement()">VIEW ANNOUNCEMENT</button>
+      </div>
+      <button class="top-alert-close" type="button" onclick="dismissTopAlert()" aria-label="Dismiss alert">
+        <i class="fa-solid fa-xmark"></i>
+      </button>
+    </div>
+
+    <!-- ====== PUBLIC TOP NAV ====== -->
+    <nav id="public-nav">
+      <div class="nav-container">
+        <button id="ui-back-btn-public" onclick="goBack()" style="display: none; background: transparent; border: none; color: var(--navy, #1e293b); font-size: 1.2rem; cursor: pointer; margin-right: 15px;">
+          <i class="fa-solid fa-arrow-left"></i>
+        </button>
+        <div class="nav-brand" onclick="navigateTo('landing')">
+          <div class="brand-icon"><i class="fa-solid fa-shield-halved"></i></div>
+          <div class="brand-text">
+            <span class="brand-name">The Creator's Bulwark</span>
+            <span class="brand-sub">PSU IP Management</span>
+          </div>
+        </div>
+        <button class="mobile-menu-btn" id="mobileMenuBtn" onclick="toggleMobileMenu()">
+          <i class="fa-solid fa-bars"></i>
+        </button>
+        <ul class="nav-links" id="navLinks">
+          <li class="nav-item-dropdown">
+            <a href="javascript:void(0)" class="nav-link">Services <i class="fa-solid fa-chevron-down" style="font-size: 0.7rem; margin-left: 4px; opacity: 0.7;"></i></a>
+            <div class="dropdown-content">
+              <div class="dropdown-header">Services</div>
+              <div class="nav-item-sub-dropdown">
+                <a href="javascript:void(0)" class="dropdown-item sub-trigger"><i class="fa-solid fa-lightbulb"></i> Patent <i class="fa-solid fa-chevron-right" style="font-size: 0.6rem; margin-left: auto; opacity: 0.5;"></i></a>
+                <div class="sub-dropdown-content">
+                  <a href="javascript:void(0)" class="dropdown-item" onclick="initiateDirectRegistration('patent-form', 'online')"><i class="fa-solid fa-file-circle-plus"></i> Register Patent</a>
+                  <a href="javascript:void(0)" onclick="navigateTo('guidelines', false, { serviceId: 'patent' })"><i class="fa-solid fa-book-open"></i> Guidelines</a>
+                </div>
+              </div>
+              <div class="nav-item-sub-dropdown">
+                <a href="javascript:void(0)" class="dropdown-item sub-trigger"><i class="fa-solid fa-stamp"></i> Trademark <i class="fa-solid fa-chevron-right" style="font-size: 0.6rem; margin-left: auto; opacity: 0.5;"></i></a>
+                <div class="sub-dropdown-content">
+                  <a href="javascript:void(0)" class="dropdown-item" onclick="initiateDirectRegistration('trademark-form', 'online')"><i class="fa-solid fa-file-circle-plus"></i> Register Trademark</a>
+                  <a href="javascript:void(0)" onclick="navigateTo('guidelines', false, { serviceId: 'trademark' })"><i class="fa-solid fa-book-open"></i> Guidelines</a>
+                </div>
+              </div>
+              <div class="nav-item-sub-dropdown">
+                <a href="javascript:void(0)" class="dropdown-item sub-trigger"><i class="fa-solid fa-gears"></i> Utility Model <i class="fa-solid fa-chevron-right" style="font-size: 0.6rem; margin-left: auto; opacity: 0.5;"></i></a>
+                <div class="sub-dropdown-content">
+                  <a href="javascript:void(0)" class="dropdown-item" onclick="initiateDirectRegistration('utility-form', 'online')"><i class="fa-solid fa-file-circle-plus"></i> Register Utility Model</a>
+                  <a href="javascript:void(0)" onclick="navigateTo('guidelines', false, { serviceId: 'utility' })"><i class="fa-solid fa-book-open"></i> Guidelines</a>
+                </div>
+              </div>
+              <div class="nav-item-sub-dropdown">
+                <a href="javascript:void(0)" class="dropdown-item sub-trigger"><i class="fa-solid fa-pen-nib"></i> Industrial Design <i class="fa-solid fa-chevron-right" style="font-size: 0.6rem; margin-left: auto; opacity: 0.5;"></i></a>
+                <div class="sub-dropdown-content">
+                  <a href="javascript:void(0)" class="dropdown-item" onclick="initiateDirectRegistration('industrial-form', 'online')"><i class="fa-solid fa-file-circle-plus"></i> Register Industrial Design</a>
+                  <a href="javascript:void(0)" onclick="navigateTo('guidelines', false, { serviceId: 'industrial' })"><i class="fa-solid fa-book-open"></i> Guidelines</a>
+                </div>
+              </div>
+              <div class="nav-item-sub-dropdown">
+                <a href="javascript:void(0)" class="dropdown-item sub-trigger"><i class="fa-solid fa-copyright"></i> Copyright <i class="fa-solid fa-chevron-right" style="font-size: 0.6rem; margin-left: auto; opacity: 0.5;"></i></a>
+                <div class="sub-dropdown-content">
+                  <a href="javascript:void(0)" onclick="initiateDirectRegistration('copyright-form', 'online')"><i class="fa-solid fa-file-circle-plus"></i> Register Copyright</a>
+                  <a href="javascript:void(0)" onclick="navigateTo('guidelines', false, { serviceId: 'copyright' })"><i class="fa-solid fa-book-open"></i> Guidelines</a>
+                </div>
+              </div>
+            </div>
+          </li>
+
+          <li><a href="javascript:void(0)" class="nav-link" onclick="navigateTo('news')">News</a></li>
+          <li><a href="javascript:void(0)" class="nav-link" onclick="navigateTo('forms')">Forms</a></li>
+          <li><a href="javascript:void(0)" class="nav-link" onclick="navigateTo('marketplace')">Marketplace</a></li>
+          <li><a href="javascript:void(0)" class="nav-link" onclick="navigateTo('about')">About</a></li>
+          <li class="nav-item-dropdown">
+            <a href="javascript:void(0)" class="nav-link" onclick="event.preventDefault()">Help <i class="fa-solid fa-chevron-down" style="font-size:0.75rem; margin-left:3px;"></i></a>
+            <div class="dropdown-content">
+              <a href="javascript:void(0)" onclick="navigateTo('faq')"><i class="fa-solid fa-circle-question"></i> FAQ</a>
+              <a href="javascript:void(0)" onclick="navigateTo('guidelines')"><i class="fa-solid fa-book-open"></i> IP Guidelines</a>
+              <a href="javascript:void(0)" onclick="navigateTo('contact')"><i class="fa-solid fa-envelope"></i> Contact Us</a>
+            </div>
+          </li>
+          <li><a href="javascript:void(0)" class="nav-link btn-signup" onclick="navigateTo('signup')">Sign Up</a></li>
+          <li><a href="/login/" class="nav-link btn-login" onclick="event.preventDefault(); navigateTo('login')">Login</a></li>
+        </ul>
+      </div>
+    </nav>
+
+    <!-- ====== DASHBOARD TOP BAR ====== -->
+    <header id="dashboard-topbar">
+      <div class="topbar-container">
+        <div class="topbar-left-controls">
+          <button class="sidebar-toggle" onclick="toggleSidebar()">
+            <i class="fa-solid fa-bars"></i>
+          </button>
+        </div>
+
+        <!-- Brand (visible only in Top Nav Layout) -->
+        <div class="topbar-brand" onclick="navigateTo('landing')">
+          <div class="brand-icon"><i class="fa-solid fa-shield-halved"></i></div>
+          <span class="brand-name">Creator's Bulwark</span>
+        </div>
+
+        <!-- Applicant Top Navigation -->
+        <nav id="dashboard-top-nav" style="display: none; align-items: center; gap: 24px; margin-left: auto; margin-right: 32px;"></nav>
+        <div class="topbar-right">
+          <div class="notif-bell-wrap" id="notifBell" onclick="toggleNotifications()">
+            <i class="fa-solid fa-bell"></i>
+            <span class="notif-badge" id="notifBadge">2</span>
+            <div class="notif-dropdown" id="notifDropdown">
+              <div class="notif-dropdown-header">
+                <span><i class="fa-solid fa-bell" style="margin-right:6px;color:var(--gold)"></i>Notifications</span>
+                <span id="notifHeaderCount" style="font-size:.75rem;color:var(--gray-400)">0 alerts</span>
+              </div>
+              <div id="notifList"></div>
+              <div style="padding:10px 16px;text-align:center;">
+                <button onclick="event.stopPropagation();clearCurrentRoleNotifications()" style="background:none;border:none;color:var(--gold-dark);font-size:.8rem;font-weight:600;cursor:pointer;">Clear All</button>
+              </div>
+            </div>
+          </div>
+          <div class="topbar-user-wrap" id="profileDropdownWrap">
+            <div class="topbar-user" onclick="toggleProfileDropdown()">
+              <div class="user-avatar"><i class="fa-solid fa-user"></i></div>
+            </div>
+            
+            <div class="profile-dropdown" id="profileDropdown">
+              <div class="profile-dropdown-header">
+                <div class="user-avatar small"><i class="fa-solid fa-user"></i></div>
+                <div class="user-meta">
+                  <div class="user-full-name" id="dropdownFullUserName">Juan dela Cruz</div>
+                  <div class="user-role-label">Applicant Portal</div>
+                </div>
+              </div>
+              <div class="profile-dropdown-body">
+                <a href="#" class="dropdown-item" id="profileAccountLink" data-applicant-only="true" onclick="navigateTo('user-profile')">
+                  <i class="fa-solid fa-circle-user"></i>
+                  <span>Account Details</span>
+                </a>
+                <div class="dropdown-item has-submenu" id="profileSettingsLink" data-applicant-only="true">
+                  <div class="dropdown-item-main">
+                    <i class="fa-solid fa-gear"></i>
+                    <span>Settings</span>
+                    <i class="fa-solid fa-chevron-right submenu-arrow"></i>
+                  </div>
+                  <div class="profile-submenu">
+                    <a href="#" class="submenu-item" onclick="event.preventDefault(); navigateTo('user-settings', false, { settingsSection: 'language' })">
+                      <i class="fa-solid fa-language"></i>
+                      <span>Language</span>
+                    </a>
+                    <a href="#" class="submenu-item" onclick="event.preventDefault(); navigateTo('user-settings', false, { settingsSection: 'notifications' })">
+                      <i class="fa-solid fa-bell"></i>
+                      <span>Notifications</span>
+                    </a>
+                    <a href="#" class="submenu-item" onclick="event.preventDefault(); navigateTo('user-settings', false, { settingsSection: 'security' })">
+                      <i class="fa-solid fa-shield-halved"></i>
+                      <span>Security</span>
+                    </a>
+                  </div>
+                </div>
+                <div class="dropdown-divider" data-applicant-only="true"></div>
+                <a href="#" class="dropdown-item logout-item" onclick="logout()">
+                  <i class="fa-solid fa-right-from-bracket"></i>
+                  <span>Sign Out</span>
+                </a>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- ====== DASHBOARD LAYOUT ====== -->
+    <div id="dashboard-layout">
+      <!-- SIDEBAR -->
+      <aside id="sidebar" class="sidebar">
+        <div class="sidebar-header">
+          <div class="sidebar-brand">
+            <div class="brand-icon small"><i class="fa-solid fa-shield-halved"></i></div>
+            <span class="brand-name" id="sidebarBrandName">Creator's Bulwark</span>
+          </div>
+        </div>
+        <nav class="sidebar-nav" id="sidebarNav">
+          <!-- Populated by JS based on role -->
+        </nav>
+      </aside>
+
+      <!-- MAIN CONTENT AREA -->
+      <main id="main-content">
+        <!-- Content injected by JS -->
+      </main>
+    </div>
+
+    <!-- ====== LANDING PAGE ====== -->
+    <section id="page-landing" class="page">
+      <!-- Hero Section -->
+      <div class="hero">
+        <div class="hero-bg-shapes">
+          <div class="shape shape-1"></div>
+          <div class="shape shape-2"></div>
+          <div class="shape shape-3"></div>
+        </div>
+        <img src="{% static 'images/psu_logo_main.png' %}" alt="Palawan State University Logo" class="hero-corner-logo left">
+        <img src="{% static 'images/partner_logo.png' %}" alt="ITS Franchise Logo" class="hero-corner-logo right">
+
+        <div class="hero-layout centered">
+          <div class="hero-content">
+            <div class="hero-badge"><i class="fa-solid fa-shield-halved"></i> PALAWAN STATE UNIVERSITY</div>
+            <h1 class="hero-title">The Creator's<br/><span class="hero-highlight">Bulwark</span></h1>
+            <p class="hero-tagline">A Multi-Tiered System for Palawan State University Intellectual Property Management</p>
+            <div class="hero-cta">
+              <button class="btn btn-primary btn-lg" onclick="navigateTo('login')"><i class="fa-solid fa-file-circle-plus"></i> Start a Submission</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+
+      <!-- News & Announcements Section -->
+      <section id="announcements-landing-section" class="section bg-light">
+        <div class="container">
+          <div class="section-header-inline">
+            <div>
+              <h2 class="section-title" style="text-align:left; margin-bottom: 8px;">News & Announcements</h2>
+              <p class="section-subtitle" style="text-align:left; margin-left: 0; margin-bottom: 0;">Stay updated with the latest institutional IP activities, events, and important alerts.</p>
+            </div>
+            <div class="header-actions">
+              <span class="pulse-indicator"></span>
+              <span style="font-size: 0.85rem; font-weight: 600; color: var(--gold-dark);">Live Updates</span>
+            </div>
+          </div>
+          <div class="announcement-grid" id="announcementGrid" style="margin-top: 40px;">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Featured Innovation Spotlight -->
+      <section id="featured-marketplace-section" class="section">
+        <div class="container">
+          <div class="section-header-inline">
+            <div>
+              <h2 class="section-title" style="text-align:left; margin-bottom: 8px;">Featured Innovations</h2>
+              <p class="section-subtitle" style="text-align:left; margin-left: 0; margin-bottom: 0;">Discover top-tier research and inventions from PSU researchers.</p>
+            </div>
+            <button class="btn btn-outline" onclick="navigateTo('marketplace')">View All Innovations <i class="fa-solid fa-arrow-right"></i></button>
+          </div>
+          
+          <div class="innovation-grid" id="featuredInnovationGrid" style="margin-top: 40px;">
+            <!-- Populated by JS -->
+          </div>
+        </div>
+      </section>
+
+      <!-- Project Overview (About) -->
+      <section class="section" id="project-overview-section">
+        <div class="container project-overview-container">
+          <div class="overview-content">
+            <span class="m-eyebrow">Our Mission</span>
+            <h2 class="section-title" style="text-align:left; margin-left:0;">Securing PSU's Intellectual Legacy</h2>
+            <p class="section-desc">The Creator's Bulwark is more than just a filing system; it is a strategic initiative by the PSU Intellectual Property Office to transform how research and creative works are managed across our institution.</p>
+            
+            <div class="overview-features">
+              <div class="overview-feature">
+                <div class="feature-icon"><i class="fa-solid fa-microchip"></i></div>
+                <div>
+                  <h4>Bridging the Knowledge Gap</h4>
+                  <p>Translating complex IP requirements into structured, guided workflows for every researcher.</p>
+                </div>
+              </div>
+              <div class="overview-feature">
+                <div class="feature-icon"><i class="fa-solid fa-diagram-project"></i></div>
+                <div>
+                  <h4>Centralized IP Governance</h4>
+                  <p>A unified command center for admins and reviewers to track progress and maintain records.</p>
+                </div>
+              </div>
+              <div class="overview-feature">
+                <div class="feature-icon"><i class="fa-solid fa-handshake-angle"></i></div>
+                <div>
+                  <h4>Technology Transfer Enablement</h4>
+                  <p>Direct integration with our Innovation Marketplace to turn protected works into market solutions.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="overview-image-wrap">
+            <div class="overview-card-stack">
+              <div class="stack-card card-1"><i class="fa-solid fa-shield-halved"></i> <span>Institutional Protection</span></div>
+              <div class="stack-card card-2"><i class="fa-solid fa-file-invoice"></i> <span>Drafting Excellence</span></div>
+              <div class="stack-card card-3"><i class="fa-solid fa-certificate"></i> <span>Certified Records</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+
+      <!-- Stats Banner --><div class="stats-banner">
+        <div class="container">
+          <div class="stats-grid">
+            <div class="stat-item">
+              <div class="stat-number" data-count="156">0</div>
+              <div class="stat-label">Pre-Filing Packets</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-number" data-count="89">0</div>
+              <div class="stat-label">Certified Records</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-number" data-count="42">0</div>
+              <div class="stat-label">Marketplace Listings</div>
+            </div>
+            <div class="stat-item">
+              <div class="stat-number" data-count="12">0</div>
+              <div class="stat-label">Stakeholder Lanes</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <footer class="landing-footer">
+        <div class="container">
+          <div class="footer-grid">
+            <div class="footer-col">
+              <div class="footer-brand">
+                <div class="brand-icon"><i class="fa-solid fa-shield-halved"></i></div>
+                <div>
+                  <h4>The Creator's Bulwark</h4>
+                  <p>Palawan State University</p>
+                </div>
+              </div>
+              <p class="footer-desc">A Multi-Tiered Intellectual Property Management System designed to streamline IP registration, protection, and commercialization for the PSU community.</p>
+            </div>
+            <div class="footer-col">
+              <h4>Quick Links</h4>
+              <ul>
+                <li><a href="javascript:void(0)" onclick="navigateTo('landing')">Home</a></li>
+                <li><a href="javascript:void(0)" onclick="navigateTo('marketplace')">Marketplace</a></li>
+                <li><a href="/login/" onclick="event.preventDefault(); navigateTo('login')">Login</a></li>
+                <li><a href="javascript:void(0)" onclick="navigateTo('terms')">Terms &amp; Conditions</a></li>
+              </ul>
+            </div>
+            <div class="footer-col">
+              <h4>Services</h4>
+              <ul>
+                <li><a href="javascript:void(0)" onclick="initiateDirectRegistration('patent-form', 'upload')">Patent Filing</a></li>
+                <li><a href="javascript:void(0)" onclick="initiateDirectRegistration('trademark-form', 'online')">Trademark Registration</a></li>
+                <li><a href="javascript:void(0)" onclick="initiateDirectRegistration('copyright-form', 'online')">Copyright Protection</a></li>
+                <li><a href="javascript:void(0)" onclick="initiateDirectRegistration('utility-form', 'upload')">Utility Model Registration</a></li>
+                <li><a href="javascript:void(0)" onclick="initiateDirectRegistration('industrial-form', 'upload')">Industrial Design Registration</a></li>
+              </ul>
+            </div>
+            <div class="footer-col">
+              <h4>Contact</h4>
+              <p><i class="fa-solid fa-location-dot"></i> Tiniguiban, Puerto Princesa City</p>
+              <p><i class="fa-solid fa-envelope"></i> ipo@psu.palawan.edu.ph</p>
+              <p><i class="fa-solid fa-phone"></i> (048) 433-2379</p>
+            </div>
+          </div>
+          <div class="footer-bottom">
+            <p>&copy; 2026 Palawan State University — The Creator's Bulwark. All rights reserved.</p>
+          </div>
+        </div>
+      </footer>
+    </section>
+
+    <!-- ====== LOGIN PAGE ====== -->
+    <section id="page-login" class="page">
+      <div class="login-wrapper">
+        <div class="login-card">
+          <div class="login-header">
+            <div class="brand-icon"><i class="fa-solid fa-shield-halved"></i></div>
+            <h2 id="loginTitle">Applicant Login</h2>
+            <p id="loginSubtitle">Login to The Creator's Bulwark</p>
+          </div>
+          <form id="loginForm" onsubmit="handleLogin(event)">
+            <div class="form-group">
+              <label for="loginEmail">Email Address</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-envelope"></i>
+                <input type="email" id="loginEmail" placeholder="Personal email" />
+              </div>
+              <span class="error-msg" id="loginEmailError"></span>
+            </div>
+            <div class="form-group">
+              <label for="loginPassword">Password</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-lock"></i>
+                <input type="password" id="loginPassword" placeholder="Enter your password" />
+              </div>
+              <span class="error-msg" id="loginPasswordError"></span>
+            </div>
+            <div class="form-options">
+              <label class="checkbox-label">
+                <input type="checkbox" /> Remember me
+              </label>
+              <a href="javascript:void(0)" class="forgot-link" id="loginForgotLink" onclick="navigateTo('forgot-password')">Forgot Password?</a>
+            </div>
+
+
+
+            <button type="submit" class="btn btn-primary btn-block" id="loginSubmitBtn">
+              <i class="fa-solid fa-right-to-bracket"></i> Sign In
+            </button>
+          </form>
+          <form id="loginOtpPanel" class="login-otp-panel" style="display:none;" onsubmit="handleLoginOtpSubmit(event)">
+            <p class="login-otp-copy">
+              Enter the 6-digit OTP code sent to your registered contact.
+            </p>
+            <div class="form-group">
+              <label for="loginOtpCode">6-digit OTP code</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-key"></i>
+                <input type="text" id="loginOtpCode" maxlength="6" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" placeholder="Enter 6-digit OTP" oninput="sanitizeLoginOtpInput(this)" />
+              </div>
+              <span class="error-msg" id="loginOtpError"></span>
+            </div>
+            <div class="login-otp-demo-note">
+              <i class="fa-solid fa-circle-info"></i>
+              <span>Use the OTP sent by the backend to complete this login.</span>
+            </div>
+            <div class="login-otp-actions">
+              <button type="submit" class="btn btn-primary btn-block" id="loginOtpVerifyBtn">
+                <i class="fa-solid fa-circle-check"></i> Verify OTP
+              </button>
+              <button type="button" class="btn btn-outline-navy btn-block" id="loginOtpResendBtn" onclick="resendLoginOtp()">
+                <i class="fa-solid fa-paper-plane"></i> Resend OTP
+              </button>
+            </div>
+            <div class="login-footer">
+              <a href="javascript:void(0)" onclick="backToLoginFromOtp()" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to Login</a>
+            </div>
+          </form>
+          <div class="login-footer" id="loginApplicantFooter">
+            <p>Don't have an account? <a href="#" onclick="navigateTo('signup')">Sign up now</a></p>
+            <div style="margin-top: 15px; font-size: 0.75rem; color: var(--gray-400);">
+              <a href="javascript:void(0)" onclick="navigateTo('terms')" style="color: var(--gray-500); text-decoration: none;">Terms &amp; Conditions</a> | <a href="javascript:void(0)" style="color: var(--gray-500); text-decoration: none;">Privacy Policy</a>
+            </div>
+          </div>
+        </div>
+        <!-- Bottom Decorative Shapes -->
+        <div class="hero-bg-shapes bottom-shapes">
+          <div class="shape shape-4"></div>
+          <div class="shape shape-5"></div>
+          <div class="shape shape-6"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====== FORGOT PASSWORD PAGE ====== -->
+    <section id="page-forgot-password" class="page">
+      <div class="login-wrapper">
+        <div class="login-card">
+          <div class="login-header">
+            <div class="brand-icon"><i class="fa-solid fa-key"></i></div>
+            <h2>Reset Your Password</h2>
+            <p>Enter your account email. We will verify the address and send a secure OTP for password recovery.</p>
+          </div>
+          <div id="forgotPasswordFormContainer">
+            <form id="forgotPasswordForm" onsubmit="handleForgotPasswordSubmit(event)">
+              <div class="form-group">
+                <label for="forgotEmail">Email Address</label>
+                <div class="input-icon">
+                  <i class="fa-solid fa-envelope"></i>
+                  <input type="email" id="forgotEmail" placeholder="Enter your registered email" required />
+                </div>
+              </div>
+              <button type="submit" class="btn btn-primary btn-block">
+                <i class="fa-solid fa-paper-plane"></i> Send Reset OTP
+              </button>
+            </form>
+          </div>
+          <div class="login-footer">
+            <a href="javascript:void(0)" onclick="navigateTo('login')" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to Login</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====== RESET PASSWORD PAGE ====== -->
+    <section id="page-reset-password" class="page">
+      <div class="login-wrapper">
+        <div class="login-card">
+          <div class="login-header">
+            <div class="brand-icon"><i class="fa-solid fa-shield-heart"></i></div>
+            <h2>Create New Password</h2>
+            <p>Set a strong password to secure your account.</p>
+          </div>
+          <form id="resetPasswordForm" onsubmit="handleResetPasswordSubmit(event)">
+            <div class="form-group">
+              <label for="resetEmail">Email Address</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-envelope"></i>
+                <input type="email" id="resetEmail" placeholder="Email used for reset" required />
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="resetOtpCode">Reset OTP</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-key"></i>
+                <input type="text" id="resetOtpCode" maxlength="6" placeholder="6-digit OTP" required />
+              </div>
+            </div>
+            <div class="form-group">
+              <label for="newPassword">New Password</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-lock"></i>
+                <input type="password" id="newPassword" placeholder="Minimum 8 characters" oninput="checkPasswordStrength()" required />
+              </div>
+              <div class="password-strength">
+                <div class="strength-meter"><div id="strengthBar" class="strength-bar"></div></div>
+                <span id="strengthLabel" class="strength-label">Weak</span>
+              </div>
+              <small class="password-rules">Use at least 8 characters with an uppercase letter, number, and symbol.</small>
+            </div>
+            <div class="form-group">
+              <label for="confirmPassword">Confirm Password</label>
+              <div class="input-icon">
+                <i class="fa-solid fa-lock"></i>
+                <input type="password" id="confirmPassword" placeholder="Repeat your new password" oninput="checkPasswordMatch()" required />
+              </div>
+              <span class="error-msg" id="confirmPasswordError"></span>
+            </div>
+            <button type="submit" id="resetBtn" class="btn btn-primary btn-block" disabled>
+              <i class="fa-solid fa-check"></i> Reset Password
+            </button>
+          </form>
+          <div class="login-footer">
+            <a href="javascript:void(0)" onclick="navigateTo('login')" class="back-link"><i class="fa-solid fa-arrow-left"></i> Back to Login</a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ====== MOCK EMAIL COMPONENTS ====== -->
+    <!-- Mock Email Notification Bubble -->
+    <div id="mock-email-notification" class="mock-email" style="display:none;" onclick="openMockEmail()">
+      <div class="email-icon"><i class="fa-solid fa-envelope"></i></div>
+      <div class="email-content">
+        <div class="email-sender">System Administration</div>
+        <div class="email-subject">Reset Your Password</div>
+        <div class="email-preview">Click here to reset your account password...</div>
+      </div>
+      <button class="email-close" onclick="event.stopPropagation(); hideMockEmail()"><i class="fa-solid fa-xmark"></i></button>
+    </div>
+
+    <!-- Mock Email Full Modal -->
+    <div class="modal-overlay" id="emailModalOverlay" onclick="closeEmailModal()">
+      <div class="modal-card email-modal" onclick="event.stopPropagation()">
+        <div class="email-modal-header">
+          <div class="email-modal-title">Reset Your Password</div>
+          <button class="modal-close" onclick="closeEmailModal()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="email-modal-body" style="padding: 32px; color: var(--navy);">
+          <p>Hi there,</p>
+          <p style="margin: 16px 0;">We received a request to reset your password for your <strong>Creator's Bulwark</strong> account. If you didn't make this request, you can safely ignore this email.</p>
+          <div style="text-align:center; margin: 32px 0;">
+            <button class="btn btn-primary" onclick="closeEmailModal(); navigateTo('reset-password')" style="padding: 12px 32px;">Reset Password</button>
+          </div>
+          <p style="font-size: 0.9rem; color: var(--gray-500);">This link will expire in 30 minutes for your security.</p>
+          <p style="margin-top: 24px;">Regards,<br><strong>PSU IP Management Team</strong></p>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- ====== SIGN-UP PAGE ====== -->
+    <section id="page-signup" class="page">
+      <div class="login-wrapper">
+        <div class="login-card signup-card-wizard">
+          <div class="login-header">
+            <div class="brand-icon"><i class="fa-solid fa-user-plus"></i></div>
+            <h2 id="signup-title">Create Account</h2>
+            <p id="signup-subtitle">Join The Creator's Bulwark Community</p>
+          </div>
+
+
+          <!-- Account Details (Step 1 is now removed) -->
+          <div id="signup-step-2">
+            <form id="signupForm" onsubmit="handleSignUp(event)">
+              <input type="hidden" id="regType" value="applicant" />
+              
+              <div class="form-group">
+                <label for="regFirstName">First Name</label>
+                <div class="input-icon">
+                  <i class="fa-solid fa-user"></i>
+                  <input type="text" id="regFirstName" placeholder="Enter your first name" required />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="regLastName">Last Name</label>
+                <div class="input-icon">
+                  <i class="fa-solid fa-user"></i>
+                  <input type="text" id="regLastName" placeholder="Enter your last name" required />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="regEmail">Email Address</label>
+                <div class="input-icon">
+                  <i class="fa-solid fa-envelope"></i>
+                  <input type="email" id="regEmail" placeholder="Enter your email" required />
+                </div>
+                <span class="error-msg" id="regEmailError"></span>
+                <small id="regEmailHint"></small>
+              </div>
+
+              <div class="form-group">
+                <label for="regPassword">Password</label>
+                <div class="input-icon">
+                  <i class="fa-solid fa-lock"></i>
+                  <input type="password" id="regPassword" placeholder="Create a password" required />
+                </div>
+              </div>
+
+              <div class="form-group">
+                <label for="regPasswordConfirm">Confirm Password</label>
+                <div class="input-icon">
+                  <i class="fa-solid fa-shield-heart"></i>
+                  <input type="password" id="regPasswordConfirm" placeholder="Confirm your password" required />
+                </div>
+                <span class="error-msg" id="regPasswordError"></span>
+              </div>
+
+              <div style="margin-bottom: 20px;">
+                <label style="display: flex; align-items: flex-start; gap: 12px; cursor: pointer; text-align: left;">
+                  <input type="checkbox" id="regTerms" required style="margin-top: 4px; width: 16px; height: 16px; flex-shrink: 0;" />
+                  <span style="font-size: 0.85rem; color: var(--gray-600); line-height: 1.5;">
+                    I agree to the <a href="javascript:void(0)" onclick="event.stopPropagation(); showTermsModal()" style="color: var(--navy); font-weight: 800; text-decoration: underline;">Terms & Conditions</a>
+                  </span>
+                </label>
+              </div>
+
+              <button type="submit" class="btn btn-primary btn-block">
+                <i class="fa-solid fa-user-check"></i> Sign Up
+              </button>
+            </form>
+          </div>
+
+          <!-- Step 3: OTP Verification (Hidden by default) -->
+          <div id="signup-step-3" style="display:none;">
+            <div style="text-align:center; margin-bottom:24px;">
+              <div style="width:64px; height:64px; border-radius:50%; background:rgba(255,127,80,0.1); color:var(--gold); display:inline-flex; align-items:center; justify-content:center; margin-bottom:16px;">
+                <i class="fa-solid fa-envelope-open-text" style="font-size:1.5rem;"></i>
+              </div>
+              <h3 style="margin-bottom:8px;">Verify Your Email</h3>
+              <p style="font-size:.9rem; color:var(--gray-500);">We sent a 6-digit code to <br><strong id="displayRegEmail" style="color:var(--navy);"></strong></p>
+              <p id="signupOtpHint" style="display:none; color:var(--gold-dark); font-size:0.85rem; margin-top:12px; font-weight:800;">Prototype OTP: <strong id="displaySignupOtp"></strong></p>
+            </div>
+            
+            <div class="otp-inputs" style="display:flex; justify-content:center; gap:10px; margin-bottom:24px;">
+              <input type="text" maxlength="1" class="otp-box" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="OTP digit 1" oninput="signupOtpAutoFocus(this)" onkeydown="signupOtpBackspace(event, this)" onpaste="handleSignupOtpPaste(event)" />
+              <input type="text" maxlength="1" class="otp-box" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="OTP digit 2" oninput="signupOtpAutoFocus(this)" onkeydown="signupOtpBackspace(event, this)" onpaste="handleSignupOtpPaste(event)" />
+              <input type="text" maxlength="1" class="otp-box" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="OTP digit 3" oninput="signupOtpAutoFocus(this)" onkeydown="signupOtpBackspace(event, this)" onpaste="handleSignupOtpPaste(event)" />
+              <input type="text" maxlength="1" class="otp-box" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="OTP digit 4" oninput="signupOtpAutoFocus(this)" onkeydown="signupOtpBackspace(event, this)" onpaste="handleSignupOtpPaste(event)" />
+              <input type="text" maxlength="1" class="otp-box" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="OTP digit 5" oninput="signupOtpAutoFocus(this)" onkeydown="signupOtpBackspace(event, this)" onpaste="handleSignupOtpPaste(event)" />
+              <input type="text" maxlength="1" class="otp-box" inputmode="numeric" pattern="[0-9]*" autocomplete="one-time-code" aria-label="OTP digit 6" oninput="signupOtpAutoFocus(this)" onkeydown="signupOtpBackspace(event, this)" onpaste="handleSignupOtpPaste(event)" />
+            </div>
+
+            <button type="button" class="btn btn-primary btn-block" onclick="verifySignupOtp()">
+              <i class="fa-solid fa-user-check"></i> Verify & Complete
+            </button>
+            <p style="text-align:center; margin-top:20px; font-size:.85rem; color:var(--gray-500);">
+              Didn't receive the code? <a href="#" onclick="event.preventDefault(); resendSignupOtp()" style="color:var(--gold); font-weight:600;">Resend OTP</a>
+            </p>
+          </div>
+
+          <div class="login-footer">
+            <p>Already have an account? <a href="#" onclick="navigateTo('login')">Login here</a></p>
+            <a href="#" onclick="navigateTo('landing')" class="back-link"><i class="fa-solid fa-arrow-left"></i> Return to Homepage</a>
+          </div>
+        </div>
+        <!-- Bottom Decorative Shapes -->
+        <div class="hero-bg-shapes bottom-shapes">
+          <div class="shape shape-4"></div>
+          <div class="shape shape-5"></div>
+          <div class="shape shape-6"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FAQ PAGE -->
+    <section id="page-faq" class="page container" style="padding-top: 100px !important;">
+      <div id="faqPublicContent">
+        <!-- FAQ content injected by JS -->
+      </div>
+    </section>
+
+    <!-- ====== GUIDELINES PAGE (PUBLIC) ====== -->
+    <section id="page-guidelines" class="page container" style="padding-top: 100px !important;">
+      <div id="guidelinesPublicContent">
+        <!-- Guidelines content injected by JS -->
+      </div>
+    </section>
+
+    <!-- ====== CONTACT US PAGE (PUBLIC) ====== -->
+    <section id="page-contact" class="page container" style="padding-top: 100px !important;">
+      <div id="contactPublicContent">
+        <!-- Contact Us content injected by JS -->
+      </div>
+    </section>
+
+    <!-- ====== FORMS PAGE (PUBLIC) ====== -->
+    <section id="page-forms" class="page container" style="padding-top: 100px !important;">
+      <div id="formsPublicContent">
+        <!-- Forms content injected by JS -->
+      </div>
+    </section>
+
+    <!-- ====== MARKETPLACE PAGE (PUBLIC) ====== -->
+    <section id="page-marketplace" class="page container" style="padding-top: 100px !important;">
+      <div id="marketplacePublicContent">
+        <!-- Marketplace content injected by JS -->
+      </div>
+    </section>
+
+    <!-- ====== TERMS & CONDITIONS PAGE (PUBLIC) ====== -->
+    <section id="page-terms" class="page container" style="padding-top: 100px !important;">
+      <div id="termsPublicContent">
+        <!-- Terms & Conditions content injected by JS -->
+      </div>
+    </section>
+
+
+    <!-- ====== MODALS ====== -->
+    <div class="modal-overlay" id="modalOverlay" onclick="closeModal()">
+      <div class="modal-card" onclick="event.stopPropagation()">
+        <div class="modal-header">
+          <h3 id="modalTitle">Modal Title</h3>
+          <button class="modal-close" onclick="closeModal()"><i class="fa-solid fa-xmark"></i></button>
+        </div>
+        <div class="modal-body" id="modalBody">
+          <!-- Content injected by JS -->
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div class="toast" id="toast">
+      <div class="toast-icon"><i class="fa-solid fa-circle-check"></i></div>
+      <span class="toast-message" id="toastMessage"></span>
+    </div>
+
+
+
+
+
+  </div> <!-- End #app -->
+
+  <script>
+    window.TCB_API_BASE_URL = "/api";
+    window.TCB_STATIC_URL = "{% static '' %}";
+  </script>
+  <script src="{% static 'js/app.js' %}?v=70"></script>
+</body>
+</html>
