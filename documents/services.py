@@ -1,6 +1,7 @@
 import hashlib
 
 from django.core.files.base import ContentFile
+from django.utils.text import get_valid_filename
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from cases.models import Case
@@ -21,15 +22,21 @@ class DocumentService:
         if uploaded_by.role == "applicant":
             if case.applicant_id != uploaded_by.id:
                 raise PermissionDenied("You can upload documents only for your own record.")
+        elif uploaded_by.role == "evaluator":
+            if case.taken_by_id != uploaded_by.id:
+                raise PermissionDenied("You can upload documents only for cases assigned to you.")
+        elif uploaded_by.role != "admin":
+            raise PermissionDenied("You do not have permission to upload documents.")
         mime_type = validate_document_file(uploaded_file)
         plaintext = uploaded_file.read()
         key, nonce, ciphertext = AESGCMDocumentCipher.encrypt(plaintext)
-        encrypted_name = f"{hashlib.sha256(ciphertext).hexdigest()}-{uploaded_file.name}"
+        original_filename = get_valid_filename(uploaded_file.name)
+        encrypted_name = f"{hashlib.sha256(ciphertext).hexdigest()}-{original_filename}"
         document = Document.objects.create(
             case=case,
             uploaded_by=uploaded_by,
             document_type=document_type,
-            original_filename=uploaded_file.name,
+            original_filename=original_filename,
             file_size=uploaded_file.size,
             mime_type=mime_type,
             encryption_key=key,

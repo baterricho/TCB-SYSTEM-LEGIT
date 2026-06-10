@@ -19,6 +19,7 @@ from .serializers import (
     ResendOTPSerializer,
     ResetPasswordSerializer,
     UserSerializer,
+    AdminUserSerializer,
     VerifyOTPSerializer,
 )
 from .services import AuthService, OTPService
@@ -26,6 +27,7 @@ from .services import AuthService, OTPService
 
 class RegisterApplicantView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "registration"
 
     def post(self, request):
         serializer = ApplicantRegistrationSerializer(data=request.data)
@@ -56,16 +58,32 @@ class AdminCreateEvaluatorView(APIView):
 
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "auth"
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        AuthService.request_login_otp(serializer.validated_data["email"], serializer.validated_data["password"], request)
-        return Response({"detail": "OTP sent to your email."})
+        data = AuthService.login(
+            serializer.validated_data["email"],
+            serializer.validated_data["password"],
+            serializer.validated_data.get("portal") or serializer.validated_data.get("role"),
+            request,
+        )
+        if data.get("otp_required"):
+            return Response({"detail": "OTP sent to your email.", "otp_required": True})
+        return Response(
+            {
+                "access": data["access"],
+                "refresh": data["refresh"],
+                "user": UserSerializer(data["user"]).data,
+                "redirect_url": data["redirect_url"],
+            }
+        )
 
 
 class VerifyOTPView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "otp"
 
     def post(self, request):
         serializer = VerifyOTPSerializer(data=request.data)
@@ -76,16 +94,31 @@ class VerifyOTPView(APIView):
             serializer.validated_data["otp_code"],
             request,
         )
+        if serializer.validated_data["purpose"] == OTPCode.Purpose.LOGIN:
+            user = AuthService._get_user_by_login_identifier(serializer.validated_data["email"])
+            if user is None:
+                user = get_object_or_404(CustomUser, email__iexact=serializer.validated_data["email"])
+            data = {
+                "tokens": {
+                    "access": data.get("access", ""),
+                    "refresh": data.get("refresh", ""),
+                },
+                "user": UserSerializer(user).data,
+                "redirect_url": data.get("redirect_url", ""),
+            }
         return Response({"detail": "OTP verified.", **data})
 
 
 class ResendOTPView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "otp"
 
     def post(self, request):
         serializer = ResendOTPSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        user = get_object_or_404(CustomUser, email__iexact=serializer.validated_data["email"])
+        user = AuthService._get_user_by_login_identifier(serializer.validated_data["email"])
+        if user is None:
+            user = get_object_or_404(CustomUser, email__iexact=serializer.validated_data["email"])
         OTPService.create_and_send(user, serializer.validated_data["purpose"], request)
         return Response({"detail": "OTP sent to your email."})
 
@@ -99,12 +132,14 @@ class LogoutView(APIView):
             RefreshToken(refresh_token).blacklist()
         except TokenError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        create_audit_log(request, request.user, "auth.logout", request.user.email, "Refresh token blacklisted.")
+        if hasattr(request, "user") and request.user.is_authenticated:
+            create_audit_log(request, request.user, "auth.logout", request.user.email, "Refresh token blacklisted.")
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class ForgotPasswordView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = ForgotPasswordSerializer(data=request.data)
@@ -115,6 +150,7 @@ class ForgotPasswordView(APIView):
 
 class ResetPasswordView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_scope = "password_reset"
 
     def post(self, request):
         serializer = ResetPasswordSerializer(data=request.data)
@@ -150,7 +186,7 @@ class CurrentUserView(generics.RetrieveUpdateAPIView):
 
 class UserAdminViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [IsAdmin]
-    serializer_class = UserSerializer
-    queryset = CustomUser.objects.all().order_by("-created_at")
+    serializer_class = AdminUserSerializer
+    queryset = CustomUser.objects.select_related("applicant_profile", "evaluator_profile").order_by("-created_at")
     filterset_fields = ("role", "status")
     search_fields = ("email", "first_name", "middle_name", "last_name")

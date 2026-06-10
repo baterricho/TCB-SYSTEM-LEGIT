@@ -39,8 +39,19 @@ class InquiryViewSet(viewsets.ModelViewSet):
         return InquirySerializer
 
     def perform_create(self, serializer):
+        user = self.request.user if self.request.user and self.request.user.is_authenticated else None
+        inquiry = serializer.save(user=user)
+        create_audit_log(self.request, user, "inquiry.created", inquiry.inquiry_code, "Public inquiry submitted.")
+
+    def perform_update(self, serializer):
         inquiry = serializer.save()
-        create_audit_log(self.request, None, "inquiry.created", inquiry.inquiry_id, "Public inquiry submitted.")
+        create_audit_log(
+            self.request,
+            self.request.user,
+            "inquiry.status_updated",
+            inquiry.inquiry_code,
+            f"Admin updated inquiry status. New status: {inquiry.status}.",
+        )
 
     @action(detail=False, methods=["post"], url_path="nlq-search")
     def nlq_search(self, request):

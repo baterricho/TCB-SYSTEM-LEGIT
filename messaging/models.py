@@ -4,7 +4,7 @@ from django.db import models
 
 class Conversation(models.Model):
     id = models.BigAutoField(primary_key=True, db_column="conversation_id")
-    case = models.ForeignKey("cases.Case", on_delete=models.CASCADE, related_name="conversations", db_column="case_id")
+    case = models.ForeignKey("cases.Case", on_delete=models.PROTECT, related_name="conversations", db_column="case_id")
     applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="applicant_conversations", db_column="applicant_id")
     evaluator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="evaluator_conversations", db_column="evaluator_id")
     created_at = models.DateTimeField(auto_now_add=True)
@@ -45,11 +45,21 @@ class Message(models.Model):
 
 class MessageAttachment(models.Model):
     id = models.BigAutoField(primary_key=True, db_column="attachment_id")
-    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="attachments", db_column="message_id")
+    message = models.ForeignKey(Message, on_delete=models.CASCADE, related_name="attachments", db_index=True, db_column="message_id")
     file_path = models.FileField(upload_to="messages/attachments/")
     original_filename = models.CharField(max_length=255)
     file_size = models.PositiveBigIntegerField()
     mime_type = models.CharField(max_length=150)
+    is_encrypted = models.BooleanField(default=False)
+    encryption_key = models.ForeignKey(
+        "security_keys.EncryptionKey",
+        on_delete=models.PROTECT,
+        related_name="message_attachments",
+        db_column="encryption_key_id",
+        null=True,
+        blank=True,
+    )
+    nonce = models.CharField(max_length=50, null=True, blank=True)
     uploaded_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:

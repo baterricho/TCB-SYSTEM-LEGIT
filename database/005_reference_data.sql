@@ -1,0 +1,14 @@
+-- 005_reference_data.sql
+-- Required reference data for The Creator's Bulwark.
+--
+-- The inspected Django models store roles, statuses, IP types, and other fixed
+-- values as CharField/TextChoices, not lookup/reference tables. Because of that
+-- there is no required seed data to insert here.
+--
+-- Do not insert users, applicants, evaluators, admins, cases, applications,
+-- documents, payments, marketplace listings, audit logs, messages, or demo data.
+--
+-- If the Django models are later changed to use lookup tables, add only those
+-- required lookup rows here and use ON CONFLICT DO NOTHING.
+
+-- No active INSERT statements are required for the current schema.

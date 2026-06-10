@@ -25,6 +25,7 @@ let pendingAction = null; // Stores action to perform after login/signup
 let currentMpType = "All";
 let landingMpType = "All";
 let marketplaceBookmarkedOnly = false;
+let marketplaceBookmarks = [];
 let dismissedTopAlertId = null;
 let evaluatorDashboardStats = null;
 let evaluatorDashboardReports = null;
@@ -108,6 +109,19 @@ const TCB_MARKETPLACE_BOOKMARKS_STORAGE_KEY = "TCB_MARKETPLACE_BOOKMARKS";
 const TCB_SIGNUP_OTP_TTL_MS = 10 * 60 * 1000;
 const APPLICANT_SESSION_TIMEOUT_MS = 15 * 60 * 1000;
 const APPLICANT_SESSION_WARNING_MS = 14 * 60 * 1000;
+const BACKEND_AUTH_ROLES = new Set(["admin", "evaluator", "applicant"]);
+
+function normalizeBackendRole(role, fallback = "") {
+  const normalized = String(role || "").trim().toLowerCase();
+  if (normalized === "superadmin") return "admin";
+  if (normalized === "reviewer") return "evaluator";
+  return BACKEND_AUTH_ROLES.has(normalized) ? normalized : fallback;
+}
+
+function normalizeAuthUser(user) {
+  if (!user) return null;
+  return { ...user, role: normalizeBackendRole(user.role || user.backendRole, "applicant") };
+}
 
 const SUPPORTED_LANGUAGES = [
   { code: "en", label: "English", nativeLabel: "English" },
@@ -325,7 +339,7 @@ function getStoredAuthSession() {
   if (access || refresh || storedUser) {
     let user = null;
     try {
-      user = storedUser ? JSON.parse(storedUser) : null;
+      user = normalizeAuthUser(storedUser ? JSON.parse(storedUser) : null);
     } catch (err) {
       user = null;
     }
@@ -353,26 +367,30 @@ function setStoredAuthSession(session) {
   }
   const access = session.tokens?.access || session.access || "";
   const refresh = session.tokens?.refresh || session.refresh || "";
+  const user = normalizeAuthUser(session.user);
   if (access) window.localStorage?.setItem("access_token", access);
   if (refresh) window.localStorage?.setItem("refresh_token", refresh);
-  if (session.user) {
-    window.localStorage?.setItem("user", JSON.stringify(session.user));
-    window.localStorage?.setItem("user_role", session.user.role || session.user.backendRole || "");
+  if (user) {
+    window.localStorage?.setItem("user", JSON.stringify(user));
+    window.localStorage?.setItem("user_role", user.role);
   } else {
     window.localStorage?.removeItem(TCB_USER_ROLE_STORAGE_KEY);
   }
-  window.localStorage?.setItem(TCB_AUTH_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage?.setItem(
+    TCB_AUTH_STORAGE_KEY,
+    JSON.stringify({ ...session, user }),
+  );
 }
 
 function saveVerifiedAuthPayload(payload) {
   const access = payload?.access || payload?.tokens?.access || "";
   const refresh = payload?.refresh || payload?.tokens?.refresh || "";
-  const user = payload?.user || null;
+  const user = normalizeAuthUser(payload?.user);
   if (access) window.localStorage?.setItem("access_token", access);
   if (refresh) window.localStorage?.setItem("refresh_token", refresh);
   if (user) {
     window.localStorage?.setItem("user", JSON.stringify(user));
-    window.localStorage?.setItem("user_role", user.role || "");
+    window.localStorage?.setItem("user_role", user.role);
   }
   safeDevLog(`Saved access token: ${Boolean(access)}`);
   safeDevLog(`Saved refresh token: ${Boolean(refresh)}`);
@@ -442,19 +460,11 @@ function t(text) {
 }
 
 function getApplicantBookmarkStore() {
-  try {
-    return JSON.parse(window.localStorage?.getItem(TCB_MARKETPLACE_BOOKMARKS_STORAGE_KEY) || "{}");
-  } catch (err) {
-    return {};
-  }
+  return {};
 }
 
 function persistApplicantBookmarkStore(store) {
-  try {
-    window.localStorage?.setItem(TCB_MARKETPLACE_BOOKMARKS_STORAGE_KEY, JSON.stringify(store || {}));
-  } catch (err) {
-    console.warn("Unable to save marketplace bookmarks", err);
-  }
+  return store;
 }
 
 function getApplicantBookmarkKey(user = getCurrentUser()) {
@@ -462,14 +472,11 @@ function getApplicantBookmarkKey(user = getCurrentUser()) {
 }
 
 function getApplicantBookmarks(user = getCurrentUser()) {
-  const store = getApplicantBookmarkStore();
-  return Array.isArray(store[getApplicantBookmarkKey(user)]) ? store[getApplicantBookmarkKey(user)] : [];
+  return Array.isArray(marketplaceBookmarks) ? marketplaceBookmarks : [];
 }
 
 function saveApplicantBookmarks(bookmarks, user = getCurrentUser()) {
-  const store = getApplicantBookmarkStore();
-  store[getApplicantBookmarkKey(user)] = Array.isArray(bookmarks) ? bookmarks : [];
-  persistApplicantBookmarkStore(store);
+  marketplaceBookmarks = Array.isArray(bookmarks) ? bookmarks : [];
 }
 
 function canUseMarketplaceBookmarks() {
@@ -611,16 +618,70 @@ function getRefreshToken() {
 }
 
 function getStoredUserRole() {
-  return window.localStorage?.getItem(TCB_USER_ROLE_STORAGE_KEY) || "";
+  return normalizeBackendRole(window.localStorage?.getItem(TCB_USER_ROLE_STORAGE_KEY) || "");
+}
+
+function getStoredAuthUser() {
+  try {
+    return normalizeAuthUser(JSON.parse(window.localStorage?.getItem(TCB_USER_STORAGE_KEY) || "null"));
+  } catch (err) {
+    return null;
+  }
 }
 
 function isEvaluatorRole(role) {
-  const rawRole = String(role || "").toLowerCase();
-  return rawRole === "evaluator" || normalizeRole(rawRole) === "reviewer";
+  return normalizeBackendRole(role) === "evaluator";
 }
 
 function isStoredEvaluatorSession() {
   return Boolean(getAccessToken() && isEvaluatorRole(getStoredUserRole()));
+}
+
+function getDashboardPathForBackendRole(role) {
+  const normalizedRole = normalizeBackendRole(role);
+  if (normalizedRole === "admin") return "/admin/dashboard/";
+  if (normalizedRole === "evaluator") return "/evaluator/dashboard/";
+  return "/applicant/dashboard/";
+}
+
+function getLoginPathForBackendRole(role) {
+  const normalizedRole = normalizeBackendRole(role);
+  if (normalizedRole === "admin") return "/admin-login/";
+  if (normalizedRole === "evaluator") return "/evaluator-login/";
+  return "/login/";
+}
+
+function getRequiredBackendRoleForDashboardPage(page) {
+  if (page === "admin-dashboard") return "admin";
+  if (page === "reviewer-dashboard") return "evaluator";
+  if (page === "reviewer-my-cases") return "evaluator";
+  if (page === "user-dashboard") return "applicant";
+  return "";
+}
+
+function hydrateAuthStateFromStorage() {
+  const user = getStoredAuthUser();
+  const token = getAccessToken();
+  if (!token || !user?.role) return null;
+  const frontendRole = frontendRoleFromBackend(user.role);
+  ensureBackendUser(user);
+  isLoggedIn = true;
+  currentRole = frontendRole;
+  selectedLoginRole = frontendRole;
+  return user;
+}
+
+function guardDashboardRoute(page) {
+  const requiredRole = getRequiredBackendRoleForDashboardPage(page);
+  if (!requiredRole) return true;
+  const token = getAccessToken();
+  const storedRole = getStoredUserRole();
+  if (!token || storedRole !== requiredRole) {
+    window.location.href = getLoginPathForBackendRole(requiredRole);
+    return false;
+  }
+  hydrateAuthStateFromStorage();
+  return true;
 }
 
 function safeDevLog(message, data = null) {
@@ -630,11 +691,17 @@ function safeDevLog(message, data = null) {
   }
 }
 
-function promptLoginRequired() {
-  showToast?.("Please login first.", "warning");
+function getCurrentLoginPage() {
+  const storedBackendRole = getStoredUserRole();
+  const backendRole = storedBackendRole || backendRoleFromFrontend(currentRole || selectedLoginRole || "applicant");
+  return getLoginPageForRole(frontendRoleFromBackend(backendRole));
+}
+
+function promptLoginRequired(message = "Please login first.") {
+  showToast?.(message, "warning");
   if (typeof navigateTo === "function") {
     pendingLoginOtp = null;
-    navigateTo("login");
+    navigateTo(getCurrentLoginPage());
   }
 }
 
@@ -670,6 +737,7 @@ async function apiRequest(path, options = {}) {
     body = null,
     auth = true,
     headers = {},
+    retry = true,
   } = options;
   const requestHeaders = { ...headers };
   const isFormData = typeof FormData !== "undefined" && body instanceof FormData;
@@ -681,7 +749,9 @@ async function apiRequest(path, options = {}) {
     const token = getAccessToken();
     if (!token) {
       promptLoginRequired();
-      throw new Error("Please login first.");
+      const authError = new Error("Please login first.");
+      authError.status = 401;
+      throw authError;
     }
     requestHeaders.Authorization = `Bearer ${token}`;
   }
@@ -706,14 +776,52 @@ async function apiRequest(path, options = {}) {
     }
   }
   if (!response.ok) {
-    if (auth && response.status === 401) {
+    if (auth && response.status === 401 && retry) {
+      const refreshed = await refreshAccessToken();
+      if (refreshed) {
+        return apiRequest(path, { ...options, retry: false });
+      }
       setStoredAuthSession(null);
-      promptLoginRequired();
-      throw new Error("Please login first.");
+      promptLoginRequired("Your session has expired. Please log in again.");
+      const authError = new Error("Your session has expired. Please log in again.");
+      authError.status = 401;
+      authError.payload = payload;
+      throw authError;
     }
-    throw new Error(extractApiError(payload) || `${response.status} ${response.statusText}`);
+    const requestError = new Error(extractApiError(payload) || `${response.status} ${response.statusText}`);
+    requestError.status = response.status;
+    requestError.payload = payload;
+    throw requestError;
   }
   return payload;
+}
+
+async function refreshAccessToken() {
+  const refresh = getRefreshToken();
+  if (!refresh) return false;
+  let response;
+  try {
+    response = await fetch(apiUrl("auth/token/refresh/"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ refresh }),
+    });
+  } catch (err) {
+    return false;
+  }
+  if (!response.ok) return false;
+  let payload = null;
+  try {
+    payload = await response.json();
+  } catch (err) {
+    return false;
+  }
+  if (!payload?.access) return false;
+  window.localStorage?.setItem("access_token", payload.access);
+  if (payload.refresh) window.localStorage?.setItem("refresh_token", payload.refresh);
+  const user = getStoredAuthUser();
+  if (user?.role) window.localStorage?.setItem("user_role", user.role);
+  return true;
 }
 
 function unwrapApiList(payload) {
@@ -723,8 +831,9 @@ function unwrapApiList(payload) {
 }
 
 function frontendRoleFromBackend(role) {
-  if (role === "admin") return "superadmin";
-  if (role === "evaluator") return "reviewer";
+  const normalizedRole = normalizeBackendRole(role, "applicant");
+  if (normalizedRole === "admin") return "superadmin";
+  if (normalizedRole === "evaluator") return "reviewer";
   return "applicant";
 }
 
@@ -735,13 +844,18 @@ function backendRoleFromFrontend(role) {
   return "applicant";
 }
 
+function canUseLoginOtpForRole(role) {
+  return backendRoleFromFrontend(role) === "applicant";
+}
+
 function jsArg(value) {
   return `'${String(value ?? "").replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
 }
 
 function ensureBackendUser(user) {
   if (!user?.id) return null;
-  const role = frontendRoleFromBackend(user.role);
+  const normalizedUser = normalizeAuthUser(user);
+  const role = frontendRoleFromBackend(normalizedUser.role);
   const applicantProfile = user.applicant_profile || user.profile || {};
   const existingIndex = systemUsers.findIndex(
     (entry) =>
@@ -756,7 +870,7 @@ function ensureBackendUser(user) {
     username: user.full_name || existing.username || user.email,
     email: user.email || existing.email || "",
     role,
-    backendRole: user.role,
+    backendRole: normalizedUser.role,
     dept: applicantProfile.institution || existing.dept || "Backend Account",
     contact: user.contact_number || applicantProfile.contact_number || existing.contact || "",
     status: user.is_active === false ? "Inactive" : "Active",
@@ -779,25 +893,25 @@ function applyAuthPayload(payload) {
     (payload?.access || payload?.refresh
       ? { access: payload.access || "", refresh: payload.refresh || "" }
       : null);
-  if (!payload?.user) {
+  const authUser = normalizeAuthUser(payload?.user);
+  if (!authUser) {
     if (tokens) setStoredAuthSession({ tokens, user: null });
     return null;
   }
   if (tokens) {
-    setStoredAuthSession({ tokens, user: payload.user });
+    setStoredAuthSession({ tokens, user: authUser });
     console.debug("TCB auth: tokens saved", {
       access: Boolean(tokens.access),
       refresh: Boolean(tokens.refresh),
-      user: Boolean(payload.user),
+      user: Boolean(authUser),
     });
   }
-  const user = ensureBackendUser(payload.user);
+  const user = ensureBackendUser(authUser);
   if (!user) return null;
 
   isLoggedIn = true;
-  currentRole = normalizeRole(user.role);
+  currentRole = frontendRoleFromBackend(authUser.role);
   selectedLoginRole = currentRole;
-  setActiveUserForRole(currentRole, user.id);
   updateTopbarRole();
   resetApplicantSessionTimeout();
   return user;
@@ -808,6 +922,12 @@ function mapBackendApplicationStatus(status) {
     draft: "Draft",
     submitted: "Pending",
     withdrawn: "Withdrawn",
+    pending: "Pending",
+    under_review: "Under Review",
+    evaluated: "Evaluated",
+    on_going: "On Going",
+    certified: "Certified",
+    archived: "Archived",
     Submitted: "Pending",
     "Under Evaluation": "Under Review",
     "Under Review": "Under Review",
@@ -833,15 +953,22 @@ function mapBackendApplication(application) {
     industrial_design: "Industrial Design",
   };
   const ipType = typeLabelMap[application.ip_type] || application.ip_type;
+  const backendCaseId = application.backendCaseId || application.backend_case_id || application.case_id || null;
+  const caseNumber = application.case_number || "";
+  const applicationCode = application.application_code || application.transaction_code || "";
   return {
-    id: application.application_code || application.transaction_code || application.id,
+    id: caseNumber || applicationCode || application.id,
     backendId: application.id,
-    backendCaseId: application.backendCaseId || null,
-    transactionCode: application.application_code || application.transaction_code || "",
+    backendCaseId,
+    caseId: backendCaseId,
+    caseNumber,
+    applicationCode,
+    transaction_code: caseNumber || applicationCode,
+    transactionCode: caseNumber || applicationCode,
     type: ipType,
     title: application.title || "Untitled Application",
     applicant: application.created_by_name || createdBy.full_name || "Applicant",
-    applicantUserId: application.created_by || createdBy.id || null,
+    applicantUserId: application.applicant || application.created_by || createdBy.id || null,
     department: createdBy.institution || createdBy.profile?.institution || "Backend Application",
     email: application.applicant_email || createdBy.email || "",
     contact: createdBy.contact_number || createdBy.profile?.contact_number || "",
@@ -878,11 +1005,17 @@ function mapBackendApplication(application) {
 }
 
 function mergeBackendApplications(items) {
-  if (!items.length) return;
+  if (!items.length) {
+    submissions.splice(0, submissions.length);
+    return;
+  }
   items.map(mapBackendApplication).forEach((backendSubmission) => {
     const index = submissions.findIndex(
       (item) =>
-        String(item.backendId || "") === String(backendSubmission.backendId) ||
+        (backendSubmission.backendCaseId &&
+          String(item.backendCaseId || item.caseId || "") === String(backendSubmission.backendCaseId)) ||
+        (backendSubmission.backendId &&
+          String(item.backendId || "") === String(backendSubmission.backendId)) ||
         String(item.id || "") === String(backendSubmission.id),
     );
     if (index >= 0) {
@@ -901,6 +1034,8 @@ function mapBackendMarketplaceItem(item, index) {
   return {
     id: item.id,
     backendId: item.id,
+    listingCode: item.listing_code || item.listing_id || "",
+    listing_id: item.listing_id || item.listing_code || "",
     title: item.title || "Untitled Innovation",
     fullTitle: item.title || "Untitled Innovation",
     type: item.ip_type || "Patent",
@@ -924,19 +1059,24 @@ function mapBackendMarketplaceItem(item, index) {
 function mapBackendAnnouncement(item) {
   return {
     id: item.id,
+    backendId: item.id,
     title: item.title || "Announcement",
     content: item.content || item.body || "",
     date: String(item.created_at || item.updated_at || new Date().toISOString()).slice(0, 10),
     category: item.category || "News",
     image: "/static/images/psu_logo_main.png",
+    isPublished: item.is_published !== false,
     backendAnnouncement: true,
   };
+}
+
+function isAdminRole() {
+  return ["admin", "superadmin"].includes(normalizeRole(currentRole));
 }
 
 async function loadBackendMarketplace() {
   const payload = await apiRequest("marketplace/listings/", { auth: false });
   const items = unwrapApiList(payload);
-  if (!items.length) return;
   marketplaceItems.splice(
     0,
     marketplaceItems.length,
@@ -944,11 +1084,547 @@ async function loadBackendMarketplace() {
   );
 }
 
+let adminMarketplaceItems = [];
+let adminMarketplaceLoadState = {
+  status: "idle",
+  message: "",
+};
+let adminAnnouncementsLoadState = {
+  status: "idle",
+  message: "",
+};
+let adminAnnouncements = [];
+let adminInquiriesLoadState = {
+  status: "idle",
+  message: "",
+};
+let ipophlEmailLoadState = {
+  status: "idle",
+  message: "",
+};
+let ipophlEmailReports = [];
+let adminDashboardReportState = {
+  status: "idle",
+  message: "",
+  summary: null,
+  applicationsByIpType: [],
+  monthlySubmissions: [],
+  caseStatusDistribution: [],
+  evaluatorWorkload: [],
+};
+
+function normalizeMarketplaceType(value) {
+  const normalized = String(value || "").trim().replace(/_/g, " ").toLowerCase();
+  const match = IP_SERVICE_TYPES.find((type) => type.toLowerCase() === normalized);
+  if (match) return match;
+  if (normalized === "industrial design") return "Industrial Design";
+  if (normalized === "utility model") return "Utility Model";
+  return value || "Patent";
+}
+
+function mapAdminMarketplaceItem(item, index = 0) {
+  const mapped = mapBackendMarketplaceItem(item, index);
+  const status = String(item?.status || "").toLowerCase();
+  return {
+    ...mapped,
+    type: normalizeMarketplaceType(item?.ip_type || mapped.type),
+    caseNumber: item?.case_number || item?.record_case_number || String(item?.record || ""),
+    sourceRecordId: item?.record || "",
+    category: item?.category || mapped.category || "",
+    availabilityStatus: item?.availability_status || mapped.availabilityStatus || "Available",
+    status,
+    isActive: item?.is_active !== false,
+    archived: status === "archived" || item?.is_active === false,
+    published: status === "published" && item?.is_active !== false,
+    backendMarketplaceItem: true,
+  };
+}
+
+async function loadBackendAdminMarketplaceListings() {
+  if (!getAccessToken()) {
+    adminMarketplaceLoadState = {
+      status: "error",
+      message: "Please login first.",
+    };
+    adminMarketplaceItems = [];
+    return;
+  }
+  if (!["admin", "superadmin"].includes(normalizeRole(currentRole))) {
+    adminMarketplaceLoadState = {
+      status: "error",
+      message: "Access denied. Admin privileges are required.",
+    };
+    adminMarketplaceItems = [];
+    return;
+  }
+
+  adminMarketplaceLoadState = { status: "loading", message: "" };
+  try {
+    const payload = await apiRequest("marketplace/admin/listings/");
+    adminMarketplaceItems = unwrapApiList(payload).map(mapAdminMarketplaceItem);
+    adminMarketplaceLoadState = { status: "loaded", message: "" };
+  } catch (err) {
+    adminMarketplaceItems = [];
+    adminMarketplaceLoadState = {
+      status: "error",
+      message: "Unable to load marketplace listings. Please try again.",
+    };
+  } finally {
+    if (currentPage === "admin-marketplace") {
+      renderDashboardContent("admin-marketplace");
+    }
+  }
+}
+
+function ensureBackendAdminMarketplaceLoaded() {
+  if (adminMarketplaceLoadState.status === "idle") {
+    loadBackendAdminMarketplaceListings();
+  }
+}
+
+function reportList(payload) {
+  return unwrapApiList(payload);
+}
+
+async function loadBackendAdminDashboardReports() {
+  if (!getAccessToken() || !["admin", "superadmin"].includes(normalizeRole(currentRole))) {
+    return;
+  }
+  adminDashboardReportState = {
+    ...adminDashboardReportState,
+    status: "loading",
+    message: "",
+  };
+  try {
+    const [
+      summary,
+      applicationsByIpType,
+      monthlySubmissions,
+      caseStatusDistribution,
+      evaluatorWorkload,
+    ] = await Promise.all([
+      apiRequest("reports/summary-metrics/"),
+      apiRequest("reports/applications-by-ip-type/"),
+      apiRequest("reports/monthly-submissions/"),
+      apiRequest("reports/case-status-distribution/"),
+      apiRequest("reports/evaluator-workload/"),
+    ]);
+    adminDashboardReportState = {
+      status: "loaded",
+      message: "",
+      summary: summary || {},
+      applicationsByIpType: reportList(applicationsByIpType),
+      monthlySubmissions: reportList(monthlySubmissions),
+      caseStatusDistribution: reportList(caseStatusDistribution),
+      evaluatorWorkload: reportList(evaluatorWorkload),
+    };
+  } catch (err) {
+    adminDashboardReportState = {
+      status: "error",
+      message: "Unable to load analytics data. Please try again.",
+      summary: null,
+      applicationsByIpType: [],
+      monthlySubmissions: [],
+      caseStatusDistribution: [],
+      evaluatorWorkload: [],
+    };
+  } finally {
+    if (currentPage === "admin-dashboard") {
+      renderDashboardContent("admin-dashboard");
+      setTimeout(() => initCharts(), 0);
+    }
+  }
+}
+
+function ensureBackendAdminDashboardReportsLoaded() {
+  if (adminDashboardReportState.status === "idle") {
+    loadBackendAdminDashboardReports();
+  }
+}
+
 async function loadBackendAnnouncements() {
   const payload = await apiRequest("announcements/", { auth: false });
   const items = unwrapApiList(payload);
-  if (!items.length) return;
   announcements.splice(0, announcements.length, ...items.map(mapBackendAnnouncement));
+}
+
+async function loadBackendAdminAnnouncements() {
+  if (!getAccessToken()) {
+    adminAnnouncementsLoadState = {
+      status: "error",
+      message: "Please login first.",
+    };
+    adminAnnouncements = [];
+    return;
+  }
+  if (!isAdminRole()) {
+    adminAnnouncementsLoadState = {
+      status: "error",
+      message: "Access denied. Admin privileges are required.",
+    };
+    adminAnnouncements = [];
+    return;
+  }
+
+  adminAnnouncementsLoadState = { status: "loading", message: "" };
+  try {
+    const payload = await apiRequest("announcements/");
+    adminAnnouncements = unwrapApiList(payload).map(mapBackendAnnouncement);
+    adminAnnouncementsLoadState = { status: "loaded", message: "" };
+  } catch (err) {
+    adminAnnouncements = [];
+    adminAnnouncementsLoadState = {
+      status: "error",
+      message: "Unable to load announcements. Please try again.",
+    };
+  } finally {
+    if (currentPage === "admin-announcements") {
+      renderDashboardContent("admin-announcements");
+    }
+  }
+}
+
+function ensureBackendAdminAnnouncementsLoaded() {
+  if (adminAnnouncementsLoadState.status === "idle") {
+    loadBackendAdminAnnouncements();
+  }
+}
+
+async function loadBackendMarketplaceBookmarks() {
+  if (!getAccessToken() || normalizeRole(currentRole) !== "applicant") {
+    marketplaceBookmarks = [];
+    return;
+  }
+  const payload = await apiRequest("marketplace/bookmarks/");
+  marketplaceBookmarks = unwrapApiList(payload)
+    .map((bookmark) => ({
+      bookmarkId: bookmark.id,
+      listingId: String(bookmark.listing?.id || ""),
+      title: bookmark.listing?.title || "",
+      type: bookmark.listing?.ip_type || "",
+      bookmarkedAt: bookmark.created_at || "",
+    }))
+    .filter((bookmark) => bookmark.listingId);
+}
+
+function mapBackendAuditLog(log) {
+  const userObject = log?.user && typeof log.user === "object" ? log.user : null;
+  const userLabel =
+    log?.user_name ||
+    log?.user_email ||
+    log?.account_name ||
+    userObject?.email ||
+    userObject?.name ||
+    userObject?.full_name ||
+    "System";
+  return {
+    id: log?.id,
+    timestamp: log?.log_timestamp || log?.created_at || log?.timestamp || "—",
+    log_timestamp: log?.log_timestamp || "",
+    created_at: log?.created_at || "",
+    accountName: userLabel,
+    account_name: log?.account_name || "",
+    user_name: log?.user_name || "",
+    user_email: log?.user_email || "",
+    user: userLabel,
+    role: log?.role || userObject?.role || "—",
+    action: normalizeAuditAction(log?.action || "—"),
+    target: log?.target || "—",
+    record: log?.record_id || log?.record || "—",
+    recordId: log?.record_id || "",
+    record_id: log?.record_id || "",
+    details: log?.details || "No details provided",
+    ipAddress: log?.ip_address || "—",
+    ip_address: log?.ip_address || "",
+    module: log?.target || "System",
+    backendAuditLog: true,
+  };
+}
+
+function mapBackendInquiry(inquiry) {
+  const backendStatus = String(inquiry.status || "new").toLowerCase();
+  const statusLabel =
+    backendStatus === "answered"
+      ? "Answered"
+      : backendStatus === "closed"
+        ? "Closed"
+        : "New";
+  return {
+    id: inquiry.inquiry_code || inquiry.id,
+    backendId: inquiry.id,
+    listingId: inquiry.listing,
+    listingTitle: "",
+    ipType: inquiry.category || "General",
+    senderName: inquiry.sender_name || "",
+    senderEmail: inquiry.email || "",
+    subject: inquiry.subject || "Inquiry",
+    message: inquiry.message || inquiry.subject || "",
+    receivedAt: inquiry.created_at || "",
+    read: backendStatus !== "new",
+    status: backendStatus,
+    statusLabel,
+    popularityCount: Number(inquiry.popularity_count || 0),
+    backendInquiry: true,
+  };
+}
+
+function getInquiryBackendSort(sortMode = contactSubmissionSortMode) {
+  if (sortMode === "popular") return "most_popular";
+  if (sortMode === "less") return "less_popular";
+  if (sortMode === "oldest") return "oldest";
+  return "";
+}
+
+async function loadBackendInquiries(options = {}) {
+  if (!getAccessToken()) {
+    adminInquiriesLoadState = {
+      status: "error",
+      message: "Please login first.",
+    };
+    marketplaceInquiries.splice(0, marketplaceInquiries.length);
+    return;
+  }
+  if (!isAdminRole()) {
+    adminInquiriesLoadState = {
+      status: "error",
+      message: "Access denied. Admin privileges are required.",
+    };
+    marketplaceInquiries.splice(0, marketplaceInquiries.length);
+    return;
+  }
+
+  adminInquiriesLoadState = { status: "loading", message: "" };
+  try {
+    const query = buildQueryString({ sort: getInquiryBackendSort() });
+    const payload = await apiRequest(`inquiries/${query}`);
+    marketplaceInquiries.splice(0, marketplaceInquiries.length, ...unwrapApiList(payload).map(mapBackendInquiry));
+    adminInquiriesLoadState = { status: "loaded", message: "" };
+  } catch (err) {
+    marketplaceInquiries.splice(0, marketplaceInquiries.length);
+    adminInquiriesLoadState = {
+      status: "error",
+      message: "Unable to load inquiries. Please try again.",
+    };
+  } finally {
+    if (options.rerender !== false && currentPage === "admin-contact-submissions") {
+      renderDashboardContent("admin-contact-submissions");
+    }
+  }
+}
+
+function ensureBackendInquiriesLoaded() {
+  if (adminInquiriesLoadState.status === "idle") {
+    loadBackendInquiries();
+  }
+}
+
+function mapBackendIPOPHLEmail(item) {
+  const createdAt = item.created_at || "";
+  const deadline = item.deadline_detected ? new Date(item.deadline_detected) : null;
+  const today = new Date();
+  if (deadline) deadline.setHours(23, 59, 59, 999);
+  const daysLeft = deadline ? Math.ceil((deadline - today) / (1000 * 60 * 60 * 24)) : null;
+  return {
+    id: String(item.id),
+    backendId: item.id,
+    caseId: item.matched_case_number || item.case_number_detected || "Unmatched",
+    matchedCaseId: item.matched_case || "",
+    ipType: item.report_type || "IPOPHL",
+    reportType: item.report_type || "IPOPHL Email",
+    subject: item.subject || "IPOPHL Email",
+    message: item.required_action || item.body || "",
+    body: item.body || "",
+    receivedAt: createdAt ? formatChatDateTime(createdAt) : "",
+    senderEmail: item.sender || "",
+    deadline,
+    daysLeft,
+    status: item.status || "unmatched",
+    read: item.status === "matched",
+    backendIPOPHLEmail: true,
+  };
+}
+
+async function loadBackendIPOPHLEmails(options = {}) {
+  if (!getAccessToken()) {
+    ipophlEmailLoadState = {
+      status: "error",
+      message: "Please login first.",
+    };
+    ipophlEmailReports = [];
+    return;
+  }
+  if (!isAdminRole()) {
+    ipophlEmailLoadState = {
+      status: "error",
+      message: "Access denied. Admin privileges are required.",
+    };
+    ipophlEmailReports = [];
+    return;
+  }
+
+  ipophlEmailLoadState = { status: "loading", message: "" };
+  try {
+    const payload = await apiRequest("ipophl-email/");
+    ipophlEmailReports = unwrapApiList(payload).map(mapBackendIPOPHLEmail);
+    ipophlEmailLoadState = { status: "loaded", message: "" };
+  } catch (err) {
+    ipophlEmailReports = [];
+    ipophlEmailLoadState = {
+      status: "error",
+      message: "Unable to load IPOPHL email records. Please try again.",
+    };
+  } finally {
+    if (options.rerender !== false && currentPage === "admin-emails") {
+      renderDashboardContent("admin-emails");
+    }
+  }
+}
+
+function ensureBackendIPOPHLEmailsLoaded() {
+  if (ipophlEmailLoadState.status === "idle") {
+    loadBackendIPOPHLEmails();
+  }
+}
+
+async function loadBackendAdminData() {
+  if (!getAccessToken()) {
+    auditLogsLoadStatus = "error";
+    auditLogsLoadMessage = "Please login first.";
+    return;
+  }
+  if (!["admin", "superadmin"].includes(normalizeRole(currentRole))) {
+    auditLogsLoadStatus = "error";
+    auditLogsLoadMessage = "Access denied. Admin privileges are required.";
+    return;
+  }
+
+  auditLogsLoadStatus = "loading";
+  auditLogsLoadMessage = "";
+
+  const [logsResult, inquiriesResult] = await Promise.allSettled([
+    apiRequest("audit-logs/"),
+    apiRequest("inquiries/"),
+  ]);
+
+  if (logsResult.status === "fulfilled") {
+    auditLogs.splice(0, auditLogs.length, ...unwrapApiList(logsResult.value).map(mapBackendAuditLog));
+    auditLogsLoadStatus = "loaded";
+    auditLogsLoadMessage = "";
+  } else {
+    auditLogs.splice(0, auditLogs.length);
+    const status = logsResult.reason?.status;
+    if (status === 401) {
+      window.location.href = "/admin-login/";
+      return;
+    }
+    auditLogsLoadStatus = "error";
+    auditLogsLoadMessage =
+      status === 403
+        ? "Access denied. Admin privileges are required."
+        : "Unable to load audit logs. Please try again.";
+  }
+
+  if (inquiriesResult.status === "fulfilled") {
+    marketplaceInquiries.splice(
+      0,
+      marketplaceInquiries.length,
+      ...unwrapApiList(inquiriesResult.value).map(mapBackendInquiry),
+    );
+    adminInquiriesLoadState = { status: "loaded", message: "" };
+  } else {
+    marketplaceInquiries.splice(0, marketplaceInquiries.length);
+    adminInquiriesLoadState = {
+      status: "error",
+      message: "Unable to load inquiries. Please try again.",
+    };
+  }
+}
+
+const EMPTY_SYSTEM_CONFIG = {
+  system_name: "",
+  institution: "",
+  admin_email: "",
+  notification_email_enabled: false,
+};
+let adminSystemConfigState = {
+  status: "idle",
+  data: { ...EMPTY_SYSTEM_CONFIG },
+  message: "",
+};
+
+function mapBackendSystemConfig(config) {
+  return {
+    ...EMPTY_SYSTEM_CONFIG,
+    ...(config || {}),
+    notification_email_enabled: Boolean(config?.notification_email_enabled),
+  };
+}
+
+async function loadBackendSystemConfig() {
+  if (!getAccessToken()) {
+    adminSystemConfigState = {
+      status: "error",
+      data: { ...EMPTY_SYSTEM_CONFIG },
+      message: "Please login first.",
+    };
+    return;
+  }
+  if (!["admin", "superadmin"].includes(normalizeRole(currentRole))) {
+    adminSystemConfigState = {
+      status: "error",
+      data: { ...EMPTY_SYSTEM_CONFIG },
+      message: "Access denied. Admin privileges are required.",
+    };
+    return;
+  }
+
+  adminSystemConfigState = {
+    ...adminSystemConfigState,
+    status: "loading",
+    message: "",
+  };
+  try {
+    const payload = await apiRequest("system-config/");
+    adminSystemConfigState = {
+      status: "loaded",
+      data: mapBackendSystemConfig(payload),
+      message: "",
+    };
+  } catch (err) {
+    adminSystemConfigState = {
+      status: "error",
+      data: { ...EMPTY_SYSTEM_CONFIG },
+      message:
+        err.status === 403
+          ? "Access denied. Admin privileges are required."
+          : "Unable to load system configuration. Please try again.",
+    };
+  } finally {
+    if (currentPage === "admin-settings") {
+      renderDashboardContent("admin-settings");
+    }
+  }
+}
+
+function ensureBackendSystemConfigLoaded() {
+  if (adminSystemConfigState.status === "idle") {
+    loadBackendSystemConfig();
+  }
+}
+
+window.saveAdminSystemConfig = async function() {
+  showToast("System configuration update endpoint is not available yet.");
+};
+
+function ensureAuditLogsLoaded() {
+  if (auditLogsLoadStatus === "loaded" || auditLogsLoadStatus === "loading") return;
+  auditLogsLoadStatus = "loading";
+  auditLogsLoadMessage = "";
+  loadBackendAdminData().finally(() => {
+    if (currentPage === "audit-log") {
+      renderDashboardContent("audit-log");
+    }
+  });
 }
 
 async function loadBackendApplications() {
@@ -962,7 +1638,7 @@ async function loadBackendApplications() {
       icon: "fa-bell",
       color: "#2563eb",
       title: n.title,
-      body: n.message,
+      body: n.content || n.message || "",
       time: n.created_at ? new Date(n.created_at).toLocaleDateString() : "Recently",
       read: n.is_read,
       category: "Notification",
@@ -991,8 +1667,11 @@ async function loadBackendApplications() {
          return {
             ...app,
             backendCaseId: c.id,
+            caseId: c.id,
             id: c.case_number || c.id,
-            transaction_code: c.case_number || app.transaction_code,
+            case_number: c.case_number || "",
+            application_code: c.application_code || app.application_code || "",
+            transaction_code: c.case_number || c.application_code || app.application_code || app.transaction_code,
             assigned_evaluator: c.taken_by || c.assigned_evaluator,
             evaluator_name: c.evaluator_name,
             status: c.status,
@@ -1006,6 +1685,7 @@ async function loadBackendApplications() {
             ip_type: app.ip_type || c.ip_type,
             title: app.title || c.title,
             created_by_name: c.applicant_name || app.created_by_name,
+            applicant_email: c.applicant_email || app.applicant_email,
             created_by: c.applicant || app.created_by
          };
       });
@@ -1014,14 +1694,42 @@ async function loadBackendApplications() {
       console.error(err);
     }
   } else {
-    const payload = await apiRequest("applications/");
-    mergeBackendApplications(unwrapApiList(payload));
+    const [applicationsPayload, casesPayload] = await Promise.all([
+      apiRequest("applications/").catch(() => []),
+      apiRequest("cases/my-cases/").catch(() => []),
+    ]);
+    const caseApplications = unwrapApiList(casesPayload).map((c) => {
+      const app = c.application || {};
+      return {
+        ...app,
+        backendCaseId: c.id,
+        caseId: c.id,
+        id: c.case_number || c.id,
+        case_number: c.case_number || "",
+        application_code: c.application_code || app.application_code || "",
+        transaction_code: c.case_number || c.application_code || app.application_code,
+        assigned_evaluator: c.taken_by || c.assigned_evaluator,
+        evaluator_name: c.evaluator_name,
+        status: c.status,
+        deadline: c.deadline,
+        priority_score: c.priority_score,
+        priority_label: c.priority_label,
+        ip_type: app.ip_type || c.ip_type,
+        title: app.title || c.title,
+        created_by_name: c.applicant_name || app.created_by_name,
+        applicant_email: c.applicant_email || app.applicant_email,
+        created_by: c.applicant || app.created_by,
+      };
+    });
+    mergeBackendApplications([...unwrapApiList(applicationsPayload), ...caseApplications]);
   }
 }
 
 async function loadBackendUsers() {
   if (!getAccessToken()) return;
+  if (!["admin", "superadmin"].includes(normalizeRole(currentRole))) return;
   const payload = await apiRequest("auth/users/");
+  systemUsers.splice(0, systemUsers.length);
   unwrapApiList(payload).forEach((user) =>
     ensureBackendUser({
       ...user,
@@ -1047,7 +1755,12 @@ async function initializeBackendConnection() {
   await Promise.allSettled([loadBackendMarketplace(), loadBackendAnnouncements()]);
   await restoreBackendSession();
   if (isLoggedIn) {
-    await Promise.allSettled([loadBackendApplications(), loadBackendUsers()]);
+    await Promise.allSettled([
+      loadBackendApplications(),
+      loadBackendUsers(),
+      loadBackendMarketplaceBookmarks(),
+      loadBackendAdminData(),
+    ]);
   }
 }
 
@@ -1086,10 +1799,19 @@ async function createBackendApplication(submittedSummary, typeLabel) {
   });
   const submitted = await apiRequest(`applications/${application.id}/submit/`, { method: "POST" });
   await uploadBackendApplicationDocuments(submitted.case_id);
-  return { ...application, status: "Submitted" };
+  return {
+    ...application,
+    status: "Submitted",
+    backendCaseId: submitted.case_id || null,
+    caseId: submitted.case_id || null,
+    case_number: submitted.case_number || "",
+    application_code: submitted.application_code || application.application_code || "",
+    transaction_code: submitted.case_number || submitted.application_code || application.application_code || "",
+    caseCreated: Boolean(submitted.case_created),
+  };
 }
 
-async function uploadBackendApplicationDocuments(applicationId) {
+async function uploadBackendApplicationDocuments(caseId) {
   const uploads = ensureRequirementUploads(wizardData);
   const uploadEntries = Object.entries(uploads);
   for (const [key, upload] of uploadEntries) {
@@ -1098,7 +1820,7 @@ async function uploadBackendApplicationDocuments(applicationId) {
       const form = new FormData();
       form.append("file", file);
       form.append("document_type", key.toLowerCase().includes("receipt") ? "Receipt" : "Support");
-      if (applicationId) form.append("case", applicationId);
+      if (caseId) form.append("case", caseId);
       await apiRequest("documents/", {
         method: "POST",
         body: form,
@@ -1821,11 +2543,13 @@ let systemUsers = [
 ];
 
 const auditLogs = [];
+let auditLogsLoadStatus = "idle";
+let auditLogsLoadMessage = "";
 
 const ROLE_META = {
   superadmin: { label: "Admin", dashboard: "admin-dashboard" },
   admin: { label: "Admin", dashboard: "admin-dashboard" },
-  reviewer: { label: "Evaluator", dashboard: "reviewer-my-cases" },
+  reviewer: { label: "Evaluator", dashboard: "reviewer-dashboard" },
   applicant: { label: "Applicant", dashboard: "user-dashboard" },
 };
 
@@ -1860,7 +2584,8 @@ const ROUTE_PATHS = {
   "evaluator-login": "/evaluator-login/",
   "user-dashboard": "/applicant/dashboard/",
   "admin-dashboard": "/admin/dashboard/",
-  "reviewer-my-cases": "/evaluator/dashboard/",
+  "reviewer-dashboard": "/evaluator/dashboard/",
+  "reviewer-my-cases": "/evaluator/my-cases/",
 };
 
 function syncBrowserRoute(page, { replace = false } = {}) {
@@ -1883,7 +2608,8 @@ function getPageForPathname(pathname = "") {
     "/evaluator-login/": "evaluator-login",
     "/applicant/dashboard/": "user-dashboard",
     "/admin/dashboard/": "admin-dashboard",
-    "/evaluator/dashboard/": "reviewer-my-cases",
+    "/evaluator/dashboard/": "reviewer-dashboard",
+    "/evaluator/my-cases/": "reviewer-my-cases",
     "/index.html/": "landing",
     "/main/index.html/": "landing",
   };
@@ -1891,7 +2617,7 @@ function getPageForPathname(pathname = "") {
 }
 
 function getProtectedPageLogin(page) {
-  if (page === "reviewer-my-cases") return "evaluator-login";
+  if (page === "reviewer-dashboard" || page === "reviewer-my-cases") return "evaluator-login";
   if (
     page === "admin-dashboard" ||
     page === "admin-submissions" ||
@@ -1917,6 +2643,7 @@ function setLoginMode(role = "applicant") {
 
   const title = document.getElementById("loginTitle");
   const subtitle = document.getElementById("loginSubtitle");
+  const emailLabel = document.querySelector("label[for='loginEmail']");
   const email = document.getElementById("loginEmail");
   const password = document.getElementById("loginPassword");
   const forgotLink = document.getElementById("loginForgotLink");
@@ -1926,26 +2653,27 @@ function setLoginMode(role = "applicant") {
     applicant: {
       title: "Applicant Login",
       subtitle: "Track your submissions and continue your IP filings.",
-      emailPlaceholder: "Personal email",
+      emailPlaceholder: "Email or username",
     },
     reviewer: {
       title: "Evaluator Login",
       subtitle: "Sign in to review assigned and available submissions.",
-      emailPlaceholder: "evaluator@psu.edu.ph",
+      emailPlaceholder: "Email or username",
     },
     superadmin: {
       title: "Admin Login",
       subtitle: "Sign in to the admin dashboard.",
-      emailPlaceholder: "admin@psu.edu.ph",
+      emailPlaceholder: "Email or username",
     },
   }[selectedLoginRole] || {
     title: "Applicant Login",
     subtitle: "Login to The Creator's Bulwark",
-    emailPlaceholder: "Personal email",
+    emailPlaceholder: "Email or username",
   };
 
   if (title) title.textContent = copy.title;
   if (subtitle) subtitle.textContent = copy.subtitle;
+  if (emailLabel) emailLabel.textContent = "Email or Username";
   if (email) email.placeholder = copy.emailPlaceholder;
   if (password) password.placeholder = "Enter your password";
   if (forgotLink) forgotLink.style.display = "";
@@ -1981,6 +2709,7 @@ const DASHBOARD_ACCESS = {
   ],
 
   reviewer: [
+    "reviewer-dashboard",
     "admin-submissions",
     "reviewer-my-cases",
     "messages",
@@ -2010,20 +2739,6 @@ const DASHBOARD_ACCESS = {
   ],
 };
 
-const OPERATIONAL_AUDIT_MODULES = new Set([
-  "Patent",
-  "Trademark",
-  "Copyright",
-  "Utility Model",
-  "Industrial Design",
-  "Audit Log",
-  "Accounts",
-  "Market Listing",
-  "Emails",
-  "Announcements",
-  "Messages",
-  "Notifications",
-]);
 const REVIEWER_ASSIGNMENTS = {
   "PSU-PAT-2026-002": 3,
   "PSU-TM-2026-002": 3,
@@ -2274,6 +2989,27 @@ function seedRevisionDemoData() {
 }
 
 const AUDIT_ROLE_FILTERS = ["Admin", "Evaluator", "Applicant", "System"];
+const DEFAULT_AUDIT_ACTION_FILTERS = [
+  "Submitted Application",
+  "Uploaded Document",
+  "Status Changed",
+  "Added Deadline",
+  "Updated Deadline",
+  "Exported Audit Log",
+  "Updated User Role",
+  "Published Announcement",
+  "System Action",
+];
+
+function getAuditActionFilters() {
+  const logs = Array.isArray(auditLogs) ? auditLogs : [];
+  return Array.from(
+    new Set([
+      ...DEFAULT_AUDIT_ACTION_FILTERS,
+      ...logs.map((log) => normalizeAuditAction(log?.action)).filter(Boolean),
+    ]),
+  ).sort((a, b) => a.localeCompare(b));
+}
 
 function formatAuditTimestamp(date = new Date()) {
   const pad = (value) => String(value).padStart(2, "0");
@@ -2281,15 +3017,29 @@ function formatAuditTimestamp(date = new Date()) {
 }
 
 function getAuditAccountName(log) {
-  return log.accountName || log.user || "System";
+  if (!log) return "System";
+  const userObject = log.user && typeof log.user === "object" ? log.user : null;
+  return log.user_name || log.user_email || log.accountName || log.account_name || userObject?.email || userObject?.name || userObject?.full_name || "System";
+}
+
+function getAuditTimestamp(log) {
+  return log?.log_timestamp || log?.created_at || log?.timestamp || "—";
+}
+
+function getAuditTarget(log) {
+  return log?.target || "—";
 }
 
 function getAuditRecord(log) {
-  return log.record || log.module || "System";
+  return log?.record_id || log?.recordId || log?.record || "—";
 }
 
 function getAuditDetails(log) {
-  return log.details || log.detail || "";
+  return log?.details || log?.detail || "No details provided";
+}
+
+function getAuditIpAddress(log) {
+  return log?.ip_address || log?.ipAddress || "—";
 }
 
 function getAuditRoleForAccount(accountName) {
@@ -2305,7 +3055,9 @@ function getAuditRoleForAccount(accountName) {
 }
 
 function getAuditRole(log) {
-  return log.role || getAuditRoleForAccount(getAuditAccountName(log));
+  const userObject = log?.user && typeof log.user === "object" ? log.user : null;
+  const role = log?.role || userObject?.role || "";
+  return role && role !== "—" ? formatRoleLabel(role) : "—";
 }
 
 function normalizeAuditAction(action = "") {
@@ -2342,6 +3094,7 @@ function getAuditActionBadgeClass(action = "") {
 }
 
 function addAuditLog({ accountName, role, action, record, details, module = "System" }) {
+  if (getAccessToken()) return;
   const safeAccountName = accountName || "System";
   auditLogs.unshift({
     timestamp: formatAuditTimestamp(),
@@ -2354,43 +3107,12 @@ function addAuditLog({ accountName, role, action, record, details, module = "Sys
   });
 }
 
-function maskSensitiveValue(value) {
-  if (!value) return "";
-  const visible = value.slice(-2);
-  return `${"*".repeat(Math.max(0, value.length - 2))}${visible}`;
-}
-
-function getSystemSecurityKeys() {
-  return {
-    primary: "KMS-PSU-2026-ACTIVE",
-    backup: "KMS-PSU-2026-STANDBY",
-  };
-}
-
-function verifyEncryptionKey(value) {
-  const enteredKey = String(value || "").trim();
-  const { primary, backup } = getSystemSecurityKeys();
-  return enteredKey === primary || enteredKey === backup;
-}
-
-function getDisplaySecurityKey(type) {
-  const keys = getSystemSecurityKeys();
-  const value = keys[type];
-  return securityKeyVisibility[type] ? value : maskSensitiveValue(value);
-}
-
 function setActiveUserForRole(role, userId) {
-  const normalizedRole = normalizeRole(role);
-  if (!userId && normalizedRole === "applicant") {
-    ACTIVE_ROLE_USER_IDS.applicant = DEFAULT_APPLICANT_USER_ID;
-    return;
-  }
-  const target = systemUsers.find(
-    (user) => String(user.id) === String(userId) && user.role === normalizedRole,
-  );
-  if (target) {
-    ACTIVE_ROLE_USER_IDS[normalizedRole] = target.id;
-  }
+  return systemUsers.find(
+    (user) =>
+      String(user.id) === String(userId) &&
+      normalizeRole(user.role) === normalizeRole(role),
+  ) || null;
 }
 
 function getReviewerUsers() {
@@ -2479,17 +3201,24 @@ function getCurrentRoleNotifications(role = currentRole) {
   );
 }
 
-window.clearCurrentRoleNotifications = function() {
+window.clearCurrentRoleNotifications = async function() {
   const normalizedRole = normalizeRole(currentRole);
   const activeUser = getCurrentUser();
-  mockNotifications[normalizedRole] = (mockNotifications[normalizedRole] || []).filter(
-    (notification) => notification.userId && activeUser && notification.userId !== activeUser.id,
-  );
+  try {
+    await apiRequest("notifications/clear/", { method: "POST" });
+    mockNotifications[normalizedRole] = [];
+    await loadBackendApplications();
+  } catch (err) {
+    mockNotifications[normalizedRole] = (mockNotifications[normalizedRole] || []).filter(
+      (notification) => notification.userId && activeUser && notification.userId !== activeUser.id,
+    );
+  }
   renderNotifications();
   showToast("Notifications cleared.", "success");
 };
 
 function pushReviewerNotification(userId, title, body) {
+  if (getAccessToken()) return;
   mockNotifications.reviewer.unshift({
     id: Date.now(),
     userId,
@@ -2504,6 +3233,7 @@ function pushReviewerNotification(userId, title, body) {
 }
 
 function pushRoleNotification(role, notification) {
+  if (getAccessToken()) return;
   const normalizedRole = normalizeRole(role);
   if (!mockNotifications[normalizedRole]) mockNotifications[normalizedRole] = [];
   mockNotifications[normalizedRole].unshift({
@@ -2933,13 +3663,150 @@ function getApplicationFormGuide(label = "") {
 function renderApplicationInfoGuide(label, message = "") {
   const guide = t(message || getApplicationFormGuide(label));
   const safeGuide = escapeHtml(guide);
-  const toastGuide = safeGuide.replace(/'/g, "\\'");
+  const guideId = `application-info-guide-${Math.random().toString(36).slice(2)}`;
   return `
-    <button type="button" class="application-info-guide" title="${safeGuide}" aria-label="${escapeHtml(t("Guide for"))} ${escapeHtml(t(label))}" onclick="showToast('${toastGuide}')">
+    <button type="button" class="application-info-guide" data-guide="${safeGuide}" aria-label="${escapeHtml(t("Guide for"))} ${escapeHtml(t(label))}" aria-expanded="false" aria-controls="${guideId}">
       <i class="fa-solid fa-info"></i>
-      <span class="application-info-guide__tooltip">${safeGuide}</span>
     </button>
   `;
+}
+
+function closeApplicationInfoGuide(activeGuide = null) {
+  const openGuides = activeGuide ? [activeGuide] : Array.from(document.querySelectorAll(".application-info-guide.is-open"));
+  openGuides.forEach((guide) => {
+    guide.classList.remove("is-open");
+    guide.setAttribute("aria-expanded", "false");
+    guide.removeAttribute("aria-describedby");
+  });
+  document.querySelectorAll(".application-info-guide__tooltip").forEach((tooltip) => tooltip.remove());
+}
+
+function positionApplicationInfoTooltip(guide, tooltip) {
+  const rect = guide.getBoundingClientRect();
+  const spacing = 10;
+  const maxWidth = Math.min(320, Math.max(220, window.innerWidth - 24));
+  tooltip.style.maxWidth = `${maxWidth}px`;
+  tooltip.style.left = "0px";
+  tooltip.style.top = "0px";
+  tooltip.style.visibility = "hidden";
+  tooltip.style.display = "block";
+
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const left = Math.min(
+    Math.max(12, rect.right - tooltipRect.width),
+    window.innerWidth - tooltipRect.width - 12,
+  );
+  const belowTop = rect.bottom + spacing;
+  const aboveTop = rect.top - tooltipRect.height - spacing;
+  const top = belowTop + tooltipRect.height <= window.innerHeight - 12
+    ? belowTop
+    : Math.max(12, aboveTop);
+
+  tooltip.style.left = `${left}px`;
+  tooltip.style.top = `${top}px`;
+  tooltip.style.visibility = "visible";
+}
+
+function toggleApplicationInfoGuide(guide) {
+  const isOpen = guide.classList.contains("is-open");
+  closeApplicationInfoGuide();
+  if (!isOpen) {
+    const guideText = guide.dataset.guide || "";
+    const tooltipId = guide.getAttribute("aria-controls") || `application-info-guide-${Date.now()}`;
+    const tooltip = document.createElement("div");
+    tooltip.id = tooltipId;
+    tooltip.className = "application-info-guide__tooltip";
+    tooltip.setAttribute("role", "tooltip");
+    tooltip.textContent = guideText;
+    document.body.appendChild(tooltip);
+    guide.classList.add("is-open");
+    guide.setAttribute("aria-expanded", "true");
+    guide.setAttribute("aria-describedby", tooltipId);
+    positionApplicationInfoTooltip(guide, tooltip);
+  }
+}
+
+function initApplicationInfoGuides() {
+  if (document.documentElement.dataset.applicationInfoGuidesBound === "true") return;
+  document.documentElement.dataset.applicationInfoGuidesBound = "true";
+  const formControlSelector = [
+    "input",
+    "textarea",
+    "select",
+    "button:not(.application-info-guide)",
+    "[contenteditable='true']",
+    ".patent-editor-choice",
+    ".patent-editor-field",
+    ".patent-editor-grid",
+  ].join(", ");
+
+  document.addEventListener("click", (event) => {
+    const guide = event.target.closest?.(".application-info-guide");
+    if (guide) {
+      event.preventDefault();
+      event.stopPropagation();
+      toggleApplicationInfoGuide(guide);
+      return;
+    }
+
+    closeApplicationInfoGuide();
+  });
+
+  document.addEventListener("keydown", (event) => {
+    const guide = event.target.closest?.(".application-info-guide");
+    if (guide && (event.key === "Enter" || event.key === " ")) {
+      event.preventDefault();
+      toggleApplicationInfoGuide(guide);
+      return;
+    }
+
+    if (event.key === "Escape") {
+      closeApplicationInfoGuide();
+    }
+  });
+
+  document.addEventListener("pointerover", (event) => {
+    if (event.target.closest?.(formControlSelector) && !event.target.closest?.(".application-info-guide")) {
+      closeApplicationInfoGuide();
+    }
+  });
+
+  document.addEventListener(
+    "pointerdown",
+    (event) => {
+      if (!event.target.closest?.(".application-info-guide")) {
+        closeApplicationInfoGuide();
+      }
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "input",
+    (event) => {
+      if (event.target.closest?.(formControlSelector)) {
+        closeApplicationInfoGuide();
+      }
+    },
+    true,
+  );
+
+  document.addEventListener(
+    "focusin",
+    (event) => {
+      if (event.target.closest?.(formControlSelector)) {
+        closeApplicationInfoGuide();
+      }
+    },
+    true,
+  );
+
+  window.addEventListener("resize", () => closeApplicationInfoGuide());
+  window.addEventListener("scroll", () => closeApplicationInfoGuide(), true);
+}
+
+if (typeof document !== "undefined" && document.readyState !== "loading") {
+  initApplicationInfoGuides();
 }
 
 function enhanceApplicationGuideIcons(root = document) {
@@ -3085,12 +3952,21 @@ function getRoleMeta(role = currentRole) {
 
 function getCurrentUser(role = currentRole) {
   const normalizedRole = normalizeRole(role);
-  const activeUserId = ACTIVE_ROLE_USER_IDS[normalizedRole];
+  const storedUser = getStoredAuthUser();
+  const storedFrontendRole = storedUser ? frontendRoleFromBackend(storedUser.role) : "";
+  if (storedUser && normalizeRole(storedFrontendRole) === normalizedRole) {
+    return (
+      systemUsers.find(
+        (user) =>
+          String(user.id || "") === String(storedUser.id || "") ||
+          String(user.email || "").toLowerCase() === String(storedUser.email || "").toLowerCase(),
+      ) ||
+      ensureBackendUser(storedUser) ||
+      storedUser
+    );
+  }
   return (
-    systemUsers.find(
-      (user) => user.role === normalizedRole && user.id === activeUserId,
-    ) ||
-    systemUsers.find((user) => user.role === normalizedRole) ||
+    systemUsers.find((user) => normalizeRole(user.role) === normalizedRole) ||
     systemUsers[0]
   );
 }
@@ -3120,6 +3996,7 @@ function getDashboardAccessDeniedMessage(page, role = currentRole) {
     "create-account",
   ]);
   const evaluatorOnlyPages = new Set(["reviewer-my-cases"]);
+  evaluatorOnlyPages.add("reviewer-dashboard");
   if (adminOnlyPages.has(page) && normalizedRole !== "superadmin" && normalizedRole !== "admin") {
     return "Access denied. Admin privileges are required.";
   }
@@ -3786,10 +4663,7 @@ function getCreatableRoleOptions(role = currentRole) {
 
 function getVisibleAuditLogs(role = currentRole) {
   const normalizedRole = normalizeRole(role);
-  if (normalizedRole === "superadmin") return auditLogs;
-  if (normalizedRole === "admin") {
-    return auditLogs.filter((log) => OPERATIONAL_AUDIT_MODULES.has(log.module));
-  }
+  if (normalizedRole === "superadmin" || normalizedRole === "admin") return Array.isArray(auditLogs) ? auditLogs : [];
   return [];
 }
 
@@ -4098,12 +4972,93 @@ function downloadCsv(filename, rows) {
   document.body.removeChild(link);
 }
 
+function getFilenameFromContentDisposition(disposition, fallbackFilename) {
+  const match = String(disposition || "").match(/filename\*?=(?:UTF-8''|")?([^";]+)/i);
+  return match ? decodeURIComponent(match[1].replace(/"/g, "")) : fallbackFilename;
+}
+
+function triggerBlobDownload(blob, filename) {
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.href = url;
+  link.download = filename;
+  link.style.display = "none";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+async function fetchBackendCsv(path, fallbackFilename, retry = true) {
+  const token = getAccessToken();
+  if (!token) {
+    promptLoginRequired();
+    const authError = new Error("Please login first.");
+    authError.status = 401;
+    throw authError;
+  }
+
+  let response;
+  try {
+    response = await fetch(apiUrl(path), {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
+  } catch (err) {
+    throw new Error("Cannot connect to backend server. Make sure Django is running.");
+  }
+
+  if (response.status === 401 && retry) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) return fetchBackendCsv(path, fallbackFilename, false);
+    setStoredAuthSession(null);
+    promptLoginRequired("Your session has expired. Please log in again.");
+  }
+
+  if (!response.ok) {
+    let message = `${response.status} ${response.statusText}`;
+    const errorText = await response.text();
+    if (errorText) {
+      try {
+        message = extractApiError(JSON.parse(errorText)) || message;
+      } catch (err) {
+        message = errorText;
+      }
+    }
+    const requestError = new Error(message);
+    requestError.status = response.status;
+    throw requestError;
+  }
+
+  const blob = await response.blob();
+  const filename = getFilenameFromContentDisposition(response.headers.get("Content-Disposition"), fallbackFilename);
+  triggerBlobDownload(blob, filename);
+}
+
+function buildQueryString(params) {
+  const query = new URLSearchParams();
+  Object.entries(params || {}).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "" || value === "All") return;
+    query.set(key, value);
+  });
+  const value = query.toString();
+  return value ? `?${value}` : "";
+}
+
+function formatLocalDateForQuery(date) {
+  const value = new Date(date);
+  value.setMinutes(value.getMinutes() - value.getTimezoneOffset());
+  return value.toISOString().slice(0, 10);
+}
+
 // ===== NAVIGATION =====
 let navHistory = [];
 const DASHBOARD_BACK_ROLES = new Set(["superadmin", "admin", "reviewer", "applicant"]);
-const DASHBOARD_ROOT_PAGES = new Set(["user-dashboard", "admin-dashboard"]);
+const DASHBOARD_ROOT_PAGES = new Set(["user-dashboard", "admin-dashboard", "reviewer-dashboard"]);
 const DASHBOARD_PAGE_LABELS = {
   "admin-dashboard": "Dashboard",
+  "reviewer-dashboard": "Dashboard",
   "user-dashboard": "Home",
   "admin-submissions": {
     reviewer: "Cases",
@@ -4138,6 +5093,14 @@ const DASHBOARD_PAGE_LABELS = {
   "industrial-form": "Industrial Design Form",
 };
 const DASHBOARD_BACK_FALLBACKS = {
+  reviewer: {
+    "admin-submissions": "reviewer-dashboard",
+    "reviewer-my-cases": "admin-submissions",
+    messages: "reviewer-my-cases",
+    "submission-detail": "reviewer-my-cases",
+    "user-profile": "reviewer-dashboard",
+    "project-blueprint": "reviewer-dashboard",
+  },
   applicant: {
     "user-submissions": "user-dashboard",
     messages: "user-dashboard",
@@ -4317,6 +5280,7 @@ function navigateTo(page, isBack = false, params = null) {
   const dashboardPages = [
     "user-dashboard",
     "admin-dashboard",
+    "reviewer-dashboard",
     "admin-submissions",
     "reviewer-my-cases",
     "messages",
@@ -4348,6 +5312,10 @@ function navigateTo(page, isBack = false, params = null) {
     "notifications",
     "contact-dash",
   ];
+
+  if (dashboardPages.includes(page) && !guardDashboardRoute(page)) {
+    return;
+  }
 
   if (page === "notifications") {
     toggleNotifications();
@@ -4408,7 +5376,7 @@ function navigateTo(page, isBack = false, params = null) {
       resetOtp.value = window.localStorage?.getItem(TCB_DEV_RESET_OTP_STORAGE_KEY) || "";
     }
   } else if (dashboardPages.includes(page)) {
-    if (page === "reviewer-my-cases") {
+    if (page === "reviewer-dashboard" || page === "reviewer-my-cases") {
       const storedRole = getStoredUserRole();
       if (!getAccessToken()) {
         window.location.href = "/evaluator-login/";
@@ -4680,9 +5648,12 @@ function isChatNotification(notification) {
   );
 }
 
-function markNotificationRead(notification) {
+async function markNotificationRead(notification) {
   if (!notification) return;
   notification.read = true;
+  if (notification.id && getAccessToken()) {
+    apiRequest(`notifications/${notification.id}/read/`, { method: "PATCH" }).catch(() => {});
+  }
   renderNotifications();
 }
 
@@ -5348,7 +6319,7 @@ async function showSignupOtpStep(signupData, options = {}) {
             },
           },
         });
-    otp = response.dev_otp || "";
+    otp = "";
   } catch (err) {
     showToast(err.message || "Unable to start registration.", "error");
     return;
@@ -5372,16 +6343,16 @@ async function showSignupOtpStep(signupData, options = {}) {
   if (title) title.innerText = "Verify Your Email";
   if (subtitle) subtitle.innerText = "Enter the OTP sent to your email to finish creating your account.";
   if (displayRegEmail) displayRegEmail.textContent = signupData.email;
-  if (displaySignupOtp) displaySignupOtp.textContent = otp || "Sent to email";
-  if (signupOtpHint) signupOtpHint.style.display = otp ? "block" : "none";
+  if (displaySignupOtp) displaySignupOtp.textContent = "Sent to email";
+  if (signupOtpHint) signupOtpHint.style.display = "none";
 
   const boxes = setSignupOtpInputs("");
   setTimeout(() => boxes[0]?.focus(), 0);
 
   showToast(
     options.resend
-      ? `A new verification code was sent.${otp ? ` Dev OTP: ${otp}` : ""}`
-      : `Verification code sent.${otp ? ` Dev OTP: ${otp}` : ""}`,
+      ? "A new verification code was sent."
+      : "Verification code sent.",
     "success",
   );
 }
@@ -5554,7 +6525,6 @@ function findLoginUser(role, email) {
   }
   if (normalizedRole === "applicant") {
     return (
-      systemUsers.find((user) => user.id === DEFAULT_APPLICANT_USER_ID) ||
       systemUsers.find(
         (user) =>
           normalizeRole(user.role) === "applicant" &&
@@ -5603,7 +6573,10 @@ function resetLoginOtpScreen() {
   setFormFieldsDisabled(loginForm, false);
   setFormFieldsDisabled(otpPanel, false);
   if (loginForm) loginForm.style.display = "";
-  if (otpPanel) otpPanel.style.display = "none";
+  if (otpPanel) {
+    otpPanel.style.display = "none";
+    otpPanel.hidden = !canUseLoginOtpForRole(selectedLoginRole);
+  }
   if (applicantFooter) {
     applicantFooter.style.display =
       normalizeRole(selectedLoginRole) === "applicant" ? "" : "none";
@@ -5617,6 +6590,13 @@ function resetLoginOtpScreen() {
 
 function showLoginOtpScreen(user, role, otpContext = {}) {
   const normalizedRole = normalizeRole(role);
+  if (!canUseLoginOtpForRole(normalizedRole)) {
+    pendingLoginOtp = null;
+    selectedLoginRole = normalizedRole;
+    resetLoginOtpScreen();
+    showToast("OTP verification is not required for this login portal.", "info");
+    return;
+  }
   const loginForm = document.getElementById("loginForm");
   const otpPanel = document.getElementById("loginOtpPanel");
   const applicantFooter = document.getElementById("loginApplicantFooter");
@@ -5640,10 +6620,13 @@ function showLoginOtpScreen(user, role, otpContext = {}) {
   setFormFieldsDisabled(otpPanel, false);
   if (loginForm) loginForm.style.display = "none";
   if (applicantFooter) applicantFooter.style.display = "none";
-  if (otpPanel) otpPanel.style.display = "grid";
+  if (otpPanel) {
+    otpPanel.hidden = false;
+    otpPanel.style.display = "grid";
+  }
   if (title) title.textContent = "OTP Verification";
   if (subtitle) {
-    subtitle.textContent = "Enter the 6-digit OTP code sent to your registered contact.";
+    subtitle.textContent = "Complete verification to continue.";
   }
   if (otpCode) {
     otpCode.value = "";
@@ -5663,13 +6646,16 @@ function showLoginOtpScreen(user, role, otpContext = {}) {
 }
 
 function validateLoginPortalRole(portalRole, actualRole) {
-  const expectedRole = normalizeRole(portalRole);
-  const resolvedRole = normalizeRole(actualRole);
-  if ((expectedRole === "superadmin" || expectedRole === "admin") && resolvedRole !== "superadmin" && resolvedRole !== "admin") {
+  const expectedRole = backendRoleFromFrontend(portalRole);
+  const resolvedRole = normalizeBackendRole(actualRole);
+  if (expectedRole === "admin" && resolvedRole !== "admin") {
     return "You are not authorized to access the Admin login portal.";
   }
-  if (expectedRole === "reviewer" && resolvedRole !== "reviewer") {
+  if (expectedRole === "evaluator" && resolvedRole !== "evaluator") {
     return "You are not authorized to access the Evaluator login portal.";
+  }
+  if (expectedRole === "applicant" && resolvedRole !== "applicant") {
+    return "You are not authorized to access the Applicant login portal.";
   }
   return "";
 }
@@ -5693,14 +6679,12 @@ async function completeLoginAfterOtp(code) {
         body: { email: pending.email, otp_code: code, purpose: "login" },
       });
       safeDevLog("OTP verified successfully");
-      backendUser = applyAuthPayload(verifyPayload);
-      if (!backendUser && (verifyPayload?.tokens || verifyPayload?.access || verifyPayload?.refresh)) {
-        const user = await apiRequest("auth/me/");
-        verifyPayload = { ...verifyPayload, user };
-        backendUser = applyAuthPayload(verifyPayload);
+      const verifiedUser = normalizeAuthUser(verifyPayload?.user);
+      if (!verifiedUser) {
+        throw new Error("OTP verified, but no user was returned by the backend.");
       }
-      saveVerifiedAuthPayload(verifyPayload);
-      const denialMessage = validateLoginPortalRole(portalRole, backendUser?.role || currentRole);
+      verifyPayload = { ...verifyPayload, user: verifiedUser };
+      const denialMessage = validateLoginPortalRole(portalRole, verifiedUser.role);
       if (denialMessage) {
         setStoredAuthSession(null);
         isLoggedIn = false;
@@ -5712,6 +6696,7 @@ async function completeLoginAfterOtp(code) {
         showToast(denialMessage, "error");
         return;
       }
+      backendUser = applyAuthPayload(verifyPayload);
     } catch (err) {
       const message = getEndpointErrorMessage(err, "verify") || "Invalid OTP.";
       showError("loginOtpError", message);
@@ -5720,11 +6705,11 @@ async function completeLoginAfterOtp(code) {
     }
   }
 
-  const loginRole = normalizeRole(backendUser?.role || pending.role);
+  const backendRole = normalizeBackendRole(verifyPayload?.user?.role, "applicant");
+  const loginRole = frontendRoleFromBackend(backendRole);
   isLoggedIn = true;
   currentRole = loginRole;
   selectedLoginRole = loginRole;
-  ACTIVE_ROLE_USER_IDS[loginRole] = backendUser?.id || pending.userId;
   const userName = backendUser?.name || pending.userName;
   pendingLoginOtp = null;
   updateTopbarRole();
@@ -5746,20 +6731,8 @@ async function completeLoginAfterOtp(code) {
   });
 
   showToast("OTP verified successfully.", "success");
-
-  if (loginRole === "reviewer" || isEvaluatorRole(verifyPayload?.user?.role)) {
-    safeDevLog("Redirecting to /evaluator/dashboard/");
-    window.location.href = "/evaluator/dashboard/";
-    return;
-  }
-
-  if (pendingAction && pendingAction.type === 'registration') {
-    const action = pendingAction;
-    pendingAction = null;
-    startSubmissionFlow(action.typeId, action.method);
-  } else {
-    navigateTo(getDefaultDashboardPage(currentRole));
-  }
+  pendingAction = null;
+  window.location.href = getDashboardPathForBackendRole(backendRole);
 
   if (userName) {
     setTimeout(() => showToast(`Prototype Access: Logged in as ${userName}`, "success"), 250);
@@ -5804,10 +6777,6 @@ window.verifyEvaluatorOtp = async function(event) {
 
 window.handleLoginOtpSubmit = async function(event) {
   if (event && typeof event.preventDefault === "function") event.preventDefault();
-  const otpRole = normalizeRole(pendingLoginOtp?.role || selectedLoginRole || "applicant");
-  if (otpRole === "reviewer") {
-    return window.verifyEvaluatorOtp(event);
-  }
   return window.verifyLoginOtp(event);
 };
 
@@ -5859,14 +6828,50 @@ async function startLogin(e, requestedRole = selectedLoginRole) {
 
   setLoginSubmitting(true);
   try {
-    await apiRequest("auth/login/", {
+    const loginPayload = await apiRequest("auth/login/", {
       method: "POST",
       auth: false,
-      body: { email: loginEmail, password: loginPassword },
+      body: {
+        email: loginEmail,
+        password: loginPassword,
+        portal: backendRoleFromFrontend(loginRole),
+      },
     });
-    if (loginRole === "reviewer") {
-      safeDevLog("Evaluator login success, OTP required");
+
+    if (loginPayload?.access && loginPayload?.refresh && loginPayload?.user) {
+      const authUser = normalizeAuthUser(loginPayload.user);
+      const denialMessage = validateLoginPortalRole(loginRole, authUser?.role);
+      if (denialMessage) {
+        setStoredAuthSession(null);
+        showError("loginPasswordError", denialMessage);
+        showToast(denialMessage, "error");
+        setLoginSubmitting(false);
+        return;
+      }
+      const backendUser = applyAuthPayload({ ...loginPayload, user: authUser });
+      const backendRole = normalizeBackendRole(authUser?.role, "applicant");
+      pendingLoginOtp = null;
+      pendingAction = null;
+      isLoggedIn = true;
+      currentRole = frontendRoleFromBackend(backendRole);
+      selectedLoginRole = currentRole;
+      updateTopbarRole();
+      showToast("Login successful.", "success");
+      window.location.href = loginPayload.redirect_url || getDashboardPathForBackendRole(backendRole);
+      if (backendUser?.name) {
+        setTimeout(() => showToast(`Prototype Access: Logged in as ${backendUser.name}`, "success"), 250);
+      }
+      return;
     }
+
+    if (loginRole !== "applicant") {
+      const message = "Login did not return a valid session. Please try again.";
+      showError("loginPasswordError", message);
+      showToast(message, "error");
+      setLoginSubmitting(false);
+      return;
+    }
+
     showLoginOtpScreen(
       { id: loginEmail, email: loginEmail, name: loginEmail, role: loginRole },
       loginRole,
@@ -5904,34 +6909,7 @@ window.otpBackspace = function (e, el) {
   }
 };
 
-window.verifyOtp = function () {
-  const boxes = document.querySelectorAll(".otp-box");
-  const code = Array.from(boxes)
-    .map((b) => b.value)
-    .join("");
-  if (code.length < 6) {
-    showToast("Please enter the full 6-digit code.");
-    return;
-  }
-
-  isLoggedIn = true;
-  currentRole = normalizeRole(selectedLoginRole);
-  if (currentRole === "applicant") {
-    setActiveUserForRole("applicant", DEFAULT_APPLICANT_USER_ID);
-  }
-  updateTopbarRole();
-  resetApplicantSessionTimeout();
-  
-  showToast("MFA verified — Successfully logged in!");
-
-  if (pendingAction && pendingAction.type === 'registration') {
-    const action = pendingAction;
-    pendingAction = null;
-    startSubmissionFlow(action.typeId, action.method);
-  } else {
-    navigateTo(getDefaultDashboardPage(currentRole));
-  }
-};
+window.verifyOtp = window.verifyLoginOtp;
 
 function logout(options = {}) {
   stopApplicantSessionTimeout();
@@ -5995,9 +6973,7 @@ window.handleForgotPasswordSubmit = async function(e) {
       body: { email },
     });
     window.localStorage?.setItem(TCB_RESET_EMAIL_STORAGE_KEY, email);
-    if (response.dev_otp) {
-      window.localStorage?.setItem(TCB_DEV_RESET_OTP_STORAGE_KEY, response.dev_otp);
-    }
+    window.localStorage?.removeItem(TCB_DEV_RESET_OTP_STORAGE_KEY);
 
     container.innerHTML = `
       <div style="text-align:center; padding: 24px 0;">
@@ -6008,20 +6984,13 @@ window.handleForgotPasswordSubmit = async function(e) {
         <p style="color:var(--gray-600); font-size:0.9rem; line-height:1.6;">
           If an account with <strong>${email}</strong> exists, we sent a password reset OTP to that address.
         </p>
-        ${
-          response.dev_otp
-            ? `<p style="color:var(--gold-dark); font-size:0.85rem; margin-top:12px; font-weight:800;">Prototype OTP: ${response.dev_otp}</p>`
-            : ""
-        }
         <button class="btn btn-primary btn-block" onclick="navigateTo('reset-password')" style="margin-top:20px;">
           Enter OTP and New Password
         </button>
       </div>
     `;
     showToast(
-      response.dev_otp
-        ? `Password reset OTP sent. Prototype OTP: ${response.dev_otp}`
-        : "Password reset OTP sent.",
+      "Password reset OTP sent.",
       "success",
     );
   } catch (err) {
@@ -6314,8 +7283,9 @@ function renderSidebar() {
     ],
 
     reviewer: [
+      { page: "reviewer-dashboard", icon: "fa-chart-line", text: "Dashboard" },
       { page: "admin-submissions", icon: "fa-inbox", text: "Cases" },
-      { page: "reviewer-my-cases", icon: "fa-briefcase", text: "Dashboard" },
+      { page: "reviewer-my-cases", icon: "fa-briefcase", text: "My Cases" },
       { page: "messages", icon: "fa-comments", text: "Messages" },
     ],
     applicant: [
@@ -6854,6 +7824,10 @@ function renderDashboardContent(page) {
         mc.innerHTML = renderAdminDashboard();
         setTimeout(() => initCharts(), 1000); // Wait a bit longer for DOM to settle
         break;
+    case "reviewer-dashboard":
+      mc.innerHTML = renderAdminDashboard();
+      setTimeout(() => initCharts(), 1000);
+      break;
     case "admin-submissions":
       mc.innerHTML = renderAdminSubmissionsPage();
       break;
@@ -6864,6 +7838,7 @@ function renderDashboardContent(page) {
       mc.innerHTML = renderMessagesPage();
       break;
     case "admin-contact-submissions":
+      ensureBackendInquiriesLoaded();
       mc.innerHTML = renderContactSubmissionsPage();
       break;
     case "admin-search":
@@ -6907,6 +7882,7 @@ function renderDashboardContent(page) {
       mc.innerHTML = renderAdminMarketplacePage();
       break;
     case "admin-emails":
+      ensureBackendIPOPHLEmailsLoaded();
       mc.innerHTML = renderAdminEmailsPage();
       break;
     case "audit-log":
@@ -6949,6 +7925,7 @@ function renderDashboardContent(page) {
       mc.innerHTML = renderProjectBlueprint();
       break;
     case "admin-announcements":
+      ensureBackendAdminAnnouncementsLoaded();
       mc.innerHTML = renderAdminAnnouncementsPage();
       break;
     case "contact-dash":
@@ -7894,11 +8871,16 @@ function getAllContactSubmissionTickets() {
           subject: `Marketplace inquiry: ${inquiry.listingTitle}`,
           type: inquiry.ipType || "Marketplace",
           timestamp: inquiry.receivedAt,
-          status: inquiry.read ? "Read" : "New",
+          status: inquiry.statusLabel || (inquiry.read ? "Answered" : "New"),
+          backendStatus: inquiry.status || "new",
+          backendId: inquiry.backendId,
+          backendInquiry: inquiry.backendInquiry,
           priority: "Normal",
           message: inquiry.message,
           source: "Inquiry Email",
+          sourceListingId: inquiry.listingId,
           sourceListingTitle: inquiry.listingTitle,
+          popularityCount: Number(inquiry.popularityCount || 0),
           suggestedReply: `Thank you for your inquiry about ${inquiry.listingTitle}. The IP office can provide availability, licensing, or collaboration details after review.`,
         }));
   const existingIds = new Set(contactSubmissions.map((item) => item.id));
@@ -7979,6 +8961,9 @@ function getMarketplaceListingInterestCount(listingId) {
 }
 
 function getInquiryPopularityCount(item, allTickets = getAllContactSubmissionTickets()) {
+  if (item.backendInquiry && Number.isFinite(Number(item.popularityCount))) {
+    return Number(item.popularityCount || 0);
+  }
   const sameTypeCount = allTickets.filter(
     (entry) => entry.id !== item.id && String(entry.type || "").toLowerCase() === String(item.type || "").toLowerCase(),
   ).length;
@@ -8087,10 +9072,15 @@ function renderInquiryNlqSummary() {
 }
 
 function renderContactSubmissionsPage() {
-  const statuses = ["All", "New", "Read", "Replied", "Archived"];
+  const statuses = ["All", "New", "Answered", "Closed"];
   const visible = getFilteredContactSubmissionTickets();
   const allTickets = getAllContactSubmissionTickets();
   const totalPopularity = visible.reduce((sum, item) => sum + Number(item.popularityCount || 0), 0);
+  const isLoading = adminInquiriesLoadState.status === "loading" || adminInquiriesLoadState.status === "idle";
+  const loadError = adminInquiriesLoadState.status === "error" ? adminInquiriesLoadState.message : "";
+  const emptyMessage = allTickets.length
+    ? "No inquiries found. Try a broader status or NLQ search."
+    : "No inquiries received yet.";
   return `
     <div class="page-header comms-page-header">
       <div>
@@ -8155,7 +9145,13 @@ function renderContactSubmissionsPage() {
             </tr>
           </thead>
           <tbody>
-            ${visible.map(renderContactSubmissionTableRow).join("") || `<tr><td colspan="9" style="text-align:center;padding:42px;color:var(--gray-400);"><i class="fa-solid fa-inbox" style="display:block;font-size:2rem;margin-bottom:10px;"></i>No inquiries found. Try a broader status or NLQ search.</td></tr>`}
+            ${
+              loadError
+                ? `<tr><td colspan="9" style="text-align:center;padding:42px;color:var(--gray-400);"><i class="fa-solid fa-triangle-exclamation" style="display:block;font-size:2rem;margin-bottom:10px;"></i>${escapeHtml(loadError)}</td></tr>`
+                : isLoading
+                  ? `<tr><td colspan="9" style="text-align:center;padding:42px;color:var(--gray-400);"><i class="fa-solid fa-spinner fa-spin" style="display:block;font-size:2rem;margin-bottom:10px;"></i>Loading inquiries...</td></tr>`
+                  : visible.map(renderContactSubmissionTableRow).join("") || `<tr><td colspan="9" style="text-align:center;padding:42px;color:var(--gray-400);"><i class="fa-solid fa-inbox" style="display:block;font-size:2rem;margin-bottom:10px;"></i>${emptyMessage}</td></tr>`
+            }
           </tbody>
         </table>
       </div>
@@ -8179,8 +9175,8 @@ function renderContactSubmissionTableRow(item) {
       <td>${formatChatDateTime(item.timestamp)}</td>
       <td>
         <div class="action-btns">
-          <button type="button" class="btn btn-primary btn-sm" onclick="handleContactTicketAction('${item.id}', 'reply')"><i class="fa-solid fa-reply"></i> Reply</button>
-          <button type="button" class="btn btn-outline-navy btn-sm" onclick="handleContactTicketAction('${item.id}', 'archive')"><i class="fa-solid fa-box-archive"></i> Archive</button>
+          <button type="button" class="btn btn-primary btn-sm" onclick="handleContactTicketAction('${item.id}', 'reply')"><i class="fa-solid fa-reply"></i> Mark Answered</button>
+          <button type="button" class="btn btn-outline-navy btn-sm" onclick="handleContactTicketAction('${item.id}', 'archive')"><i class="fa-solid fa-box-archive"></i> Close</button>
           <button type="button" class="btn btn-secondary btn-sm" onclick="handleContactTicketAction('${item.id}', 'suggest')"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Suggest</button>
         </div>
       </td>
@@ -8207,8 +9203,8 @@ function renderContactSubmissionTicket(item) {
       </div>
       </div>
       <aside class="contact-ticket-actions">
-        <button type="button" class="btn btn-primary btn-sm" onclick="handleContactTicketAction('${item.id}', 'reply')"><i class="fa-solid fa-reply"></i> Reply</button>
-        <button type="button" class="btn btn-outline-navy btn-sm" onclick="handleContactTicketAction('${item.id}', 'archive')"><i class="fa-solid fa-box-archive"></i> Archive</button>
+        <button type="button" class="btn btn-primary btn-sm" onclick="handleContactTicketAction('${item.id}', 'reply')"><i class="fa-solid fa-reply"></i> Mark Answered</button>
+        <button type="button" class="btn btn-outline-navy btn-sm" onclick="handleContactTicketAction('${item.id}', 'archive')"><i class="fa-solid fa-box-archive"></i> Close</button>
         <button type="button" class="btn btn-secondary btn-sm" onclick="handleContactTicketAction('${item.id}', 'suggest')"><i class="fa-solid fa-wand-magic-sparkles"></i> AI Suggest</button>
       </aside>
       <div class="contact-ticket-ai">
@@ -8226,6 +9222,8 @@ window.setContactSubmissionStatusFilter = function(status) {
 
 window.setContactSubmissionSort = function(sortMode) {
   contactSubmissionSortMode = sortMode || "newest";
+  adminInquiriesLoadState.status = "idle";
+  loadBackendInquiries({ rerender: false });
   renderDashboardContent("admin-contact-submissions");
 };
 
@@ -8239,13 +9237,28 @@ window.clearContactSubmissionNlq = function() {
   renderDashboardContent("admin-contact-submissions");
 };
 
-window.handleContactTicketAction = function(id, action) {
-  const actionLabel = {
-    reply: "Reply workflow ready for",
-    archive: "Archive action queued for",
-    suggest: "AI response suggestion prepared for",
-  }[action] || "Action queued for";
-  showToast(`${actionLabel} ${id}.`);
+window.handleContactTicketAction = async function(id, action) {
+  if (action === "suggest") {
+    showToast(`AI response suggestion prepared for ${id}.`);
+    return;
+  }
+  const ticket = getAllContactSubmissionTickets().find((item) => String(item.id) === String(id));
+  if (!ticket?.backendId) {
+    showToast("Unable to update inquiry status. Please try again.", "error");
+    return;
+  }
+  const status = action === "archive" ? "closed" : "answered";
+  try {
+    await apiRequest(`inquiries/${ticket.backendId}/`, {
+      method: "PATCH",
+      body: { status },
+    });
+    await loadBackendInquiries({ rerender: false });
+    showToast("Inquiry status updated successfully.");
+    renderDashboardContent("admin-contact-submissions");
+  } catch (err) {
+    showToast("Unable to update inquiry status. Please try again.", "error");
+  }
 };
 
 window.selectChatAttachment = function(input, caseId) {
@@ -8277,6 +9290,7 @@ window.clearChatAttachment = function(caseId) {
 };
 
 function pushChatNotification(receiverId, submission, preview) {
+  if (getAccessToken()) return;
   const receiver = systemUsers.find((user) => user.id === receiverId);
   if (!receiver) return;
   const receiverRole = normalizeRole(receiver.role);
@@ -8308,7 +9322,13 @@ function buildCopyrightPaymentRequestText(submission, amount, details, note) {
   return lines.join("\n");
 }
 
-function sendCopyrightPaymentRequestMessage(submission, amount, details, note = "") {
+function parseCurrencyAmount(value) {
+  const normalized = String(value || "").replace(/[^0-9.]/g, "");
+  const amount = Number.parseFloat(normalized);
+  return Number.isFinite(amount) && amount > 0 ? amount.toFixed(2) : "";
+}
+
+function sendCopyrightPaymentRequestMessage(submission, amount, details, note = "", assessment = null) {
   const sender = getCurrentUser();
   const receiverId = getSubmissionApplicantUser(submission)?.id || null;
   if (!receiverId) {
@@ -8328,6 +9348,8 @@ function sendCopyrightPaymentRequestMessage(submission, amount, details, note = 
     payment_amount: amount,
     payment_details: details,
     payment_note: note,
+    backend_assessment_id: assessment?.id || null,
+    backend_amount: assessment?.amount || parseCurrencyAmount(amount),
     receipt_status: "awaiting-receipt",
     message_text: messageText,
     attachment_url: "",
@@ -8387,7 +9409,7 @@ window.showCopyrightPaymentRequestModal = function(submissionId) {
   overlay.classList.add("active");
 };
 
-window.confirmCopyrightPaymentValidation = function(submissionId) {
+window.confirmCopyrightPaymentValidation = async function(submissionId) {
   const submission = submissions.find((s) => s.id === submissionId);
   if (!submission) return;
   const amount = (document.getElementById("copyrightPaymentAmount")?.value || "").trim();
@@ -8398,15 +9420,52 @@ window.confirmCopyrightPaymentValidation = function(submissionId) {
     showToast("Please enter the payment amount.");
     return;
   }
+  const backendAmount = parseCurrencyAmount(amount);
+  if (!backendAmount) {
+    showToast("Please enter a valid payment amount.");
+    return;
+  }
   if (!details) {
     showToast("Please provide GCash, bank, or other payment details.");
     return;
   }
 
   const previousStatus = submission.status;
+  let assessment = null;
+  try {
+    if (submission.backendCaseId && submission.backendId) {
+      assessment = await apiRequest("payments/assessments/", {
+        method: "POST",
+        body: {
+          case: submission.backendCaseId,
+          application: submission.backendId,
+          amount: backendAmount,
+          fee_type: "Copyright filing",
+          description: [details, note].filter(Boolean).join("\n\n"),
+        },
+      });
+      await apiRequest(`cases/${submission.backendCaseId}/status/`, {
+        method: "PATCH",
+        body: { status: "evaluated", remarks: "Copyright payment assessment issued." },
+      }).catch(() => null);
+      const conversation = await apiRequest("messages/conversations/", {
+        method: "POST",
+        body: { case: submission.backendCaseId },
+      });
+      submission.backendConversationId = conversation.id;
+      await apiRequest(`messages/conversations/${conversation.id}/messages/`, {
+        method: "POST",
+        body: { content: buildCopyrightPaymentRequestText(submission, amount, details, note) },
+      });
+    }
+  } catch (err) {
+    showToast(err.message || "Unable to create payment assessment.", "error");
+    return;
+  }
   submission.status = "Validated";
   syncSubmissionWorkflowState(submission);
-  const sent = sendCopyrightPaymentRequestMessage(submission, amount, details, note);
+  if (assessment?.id) submission.backendFeeAssessmentId = assessment.id;
+  const sent = sendCopyrightPaymentRequestMessage(submission, amount, details, note, assessment);
   if (!sent) {
     submission.status = previousStatus;
     syncSubmissionWorkflowState(submission);
@@ -8425,7 +9484,7 @@ window.confirmCopyrightPaymentValidation = function(submissionId) {
   navigateTo("messages", false, { caseId: submission.id });
 };
 
-window.handlePaymentReceiptUpload = function(input, caseId, requestId, returnPage = "messages") {
+window.handlePaymentReceiptUpload = async function(input, caseId, requestId, returnPage = "messages") {
   const file = input.files?.[0];
   if (!file) return;
   const result = validateChatFile(file);
@@ -8443,6 +9502,38 @@ window.handlePaymentReceiptUpload = function(input, caseId, requestId, returnPag
   }
   if (normalizeRole(currentRole) !== "applicant" || request.receiver_id !== getCurrentUser().id) {
     showToast("Only the applicant can upload the payment receipt.");
+    return;
+  }
+
+  try {
+    const assessmentId = request.backend_assessment_id || submission.backendFeeAssessmentId;
+    if (assessmentId) {
+      const form = new FormData();
+      form.append("assessment", assessmentId);
+      form.append("amount_paid", request.backend_amount || parseCurrencyAmount(request.payment_amount) || "0.00");
+      form.append("payment_method", "Uploaded receipt");
+      form.append("file", file);
+      await apiRequest("payments/", { method: "POST", body: form });
+    }
+    if (!submission.backendConversationId && submission.backendCaseId) {
+      const conversation = await apiRequest("messages/conversations/", {
+        method: "POST",
+        body: { case: submission.backendCaseId },
+      });
+      submission.backendConversationId = conversation.id;
+    }
+    if (submission.backendConversationId) {
+      const messageForm = new FormData();
+      messageForm.append("body", `Payment receipt uploaded for ${request.payment_amount || "the copyright filing payment"}.`);
+      messageForm.append("files", file);
+      await apiRequest(`messages/conversations/${submission.backendConversationId}/messages/`, {
+        method: "POST",
+        body: messageForm,
+      });
+    }
+  } catch (err) {
+    input.value = "";
+    showToast(err.message || "Unable to upload payment receipt.", "error");
     return;
   }
 
@@ -8513,11 +9604,18 @@ window.sendChatMessage = async function(caseId) {
   }
 
   try {
+    if (!submission.backendConversationId && submission.backendCaseId) {
+      const conversation = await apiRequest("messages/conversations/", {
+        method: "POST",
+        body: { case: submission.backendCaseId },
+      });
+      submission.backendConversationId = conversation.id;
+    }
     if (submission.backendConversationId) {
       const form = new FormData();
       form.append("body", text);
       if (attachment?._rawFile) form.append("files", attachment._rawFile);
-      await apiRequest(`messaging/conversations/${submission.backendConversationId}/send/`, {
+      await apiRequest(`messages/conversations/${submission.backendConversationId}/messages/`, {
         method: "POST",
         body: form,
       });
@@ -9256,6 +10354,9 @@ function renderProjectBlueprint() {
 //// ===== ADMIN DASHBOARD HUB (Supports All Admin/Reviewer/Staff Roles) =====
 function renderAdminDashboard() {
   const role = normalizeRole(currentRole);
+  if (["admin", "superadmin"].includes(role)) {
+    ensureBackendAdminDashboardReportsLoaded();
+  }
   const stats = getRoleSpecificStats(role);
   const panels = getRoleSpecificPanels(role);
   const user = getCurrentUser(role);
@@ -9589,6 +10690,39 @@ function legacyGetRoleSpecificPanels(role) {
 
 function getRoleSpecificStats(role) {
   const norm = normalizeRole(role);
+  if (["admin", "superadmin"].includes(norm)) {
+    const summary = adminDashboardReportState.summary || {};
+    return {
+      title: "Admin Dashboard",
+      subtitle: "Global oversight of all university IP activities.",
+      cards: [
+        {
+          label: "Total Applications",
+          value: summary.total_applications ?? summary.applications ?? 0,
+          icon: "fa-folder-open",
+          color: "blue",
+        },
+        {
+          label: "Pending Cases",
+          value: summary.pending_cases ?? 0,
+          icon: "fa-hourglass-half",
+          color: "yellow",
+        },
+        {
+          label: "Under Review",
+          value: summary.under_review_cases ?? 0,
+          icon: "fa-microscope",
+          color: "green",
+        },
+        {
+          label: "Overdue",
+          value: summary.overdue_cases ?? 0,
+          icon: "fa-triangle-exclamation",
+          color: "indigo",
+        },
+      ],
+    };
+  }
   const visibleSubmissions = getVisibleSubmissions(role);
   const total = visibleSubmissions.length;
   const pending = visibleSubmissions.filter(
@@ -9693,6 +10827,21 @@ function getRoleSpecificPanels(role) {
   const mainPanelTitle =
     normalizedRole === "reviewer" ? "Available Cases & My Cases" : "Action Required";
   const analyticsRows = getFilteredDashboardAnalyticsSubmissions(normalizedRole);
+  const adminAnalyticsEmpty =
+    ["admin", "superadmin"].includes(normalizedRole) &&
+    adminDashboardReportState.status === "loaded" &&
+    !adminDashboardReportState.monthlySubmissions.length &&
+    !adminDashboardReportState.applicationsByIpType.length &&
+    !adminDashboardReportState.caseStatusDistribution.length &&
+    !adminDashboardReportState.evaluatorWorkload.length;
+  const analyticsMessage =
+    adminDashboardReportState.status === "loading"
+      ? "Loading backend analytics..."
+      : adminDashboardReportState.status === "error"
+        ? adminDashboardReportState.message
+        : adminAnalyticsEmpty
+          ? "No analytics data available yet."
+          : `Showing backend portfolio analytics.`;
 
   const main = `
     <div style="display:flex; flex-direction:column; gap:24px;">
@@ -9700,7 +10849,7 @@ function getRoleSpecificPanels(role) {
         <div style="display:flex;justify-content:space-between;gap:14px;align-items:flex-start;flex-wrap:wrap;margin-bottom:16px;">
           <div>
             <h3 style="font-size:1.15rem; color:var(--navy); font-weight:800; margin-bottom:4px;"><i class="fa-solid fa-chart-line" style="color:var(--gold); margin-right:6px;"></i> Portfolio Analytics</h3>
-            <p style="font-size:.82rem;color:var(--gray-500);margin:0;">${normalizedRole === "reviewer" ? "Evaluator analytics from reports." : `Showing ${analyticsRows.length} ${dashboardAnalyticsType === "All" ? "portfolio" : dashboardAnalyticsType} record${analyticsRows.length !== 1 ? "s" : ""}.`}</p>
+            <p style="font-size:.82rem;color:var(--gray-500);margin:0;">${normalizedRole === "reviewer" ? "Evaluator analytics from reports." : analyticsMessage}</p>
           </div>
           ${normalizedRole === "reviewer" ? "" : `<div style="display:flex;gap:8px;flex-wrap:wrap;">
             <select class="filter-select" onchange="setDashboardAnalyticsFilter('type', this.value)">
@@ -9722,14 +10871,17 @@ function getRoleSpecificPanels(role) {
             </select>
             <select class="filter-select" onchange="setDashboardAnalyticsFilter('result', this.value)">
               <option value="All" ${dashboardAnalyticsResult === "All" ? "selected" : ""}>All Results</option>
-              <option value="Patent" ${dashboardAnalyticsResult === "Patent" ? "selected" : ""}>Patent</option>
-              <option value="Utility Model" ${dashboardAnalyticsResult === "Utility Model" ? "selected" : ""}>Utility Model</option>
+              <option value="approved_certified" ${dashboardAnalyticsResult === "approved_certified" ? "selected" : ""}>Approved / Certified</option>
+              <option value="for_revision" ${dashboardAnalyticsResult === "for_revision" ? "selected" : ""}>For Revision</option>
+              <option value="rejected" ${dashboardAnalyticsResult === "rejected" ? "selected" : ""}>Rejected</option>
+              <option value="pending" ${dashboardAnalyticsResult === "pending" ? "selected" : ""}>Pending</option>
+              <option value="no_result_yet" ${dashboardAnalyticsResult === "no_result_yet" ? "selected" : ""}>No Result Yet</option>
             </select>
             ${dashboardAnalyticsPeriod === "Custom" ? `<input class="filter-select" type="date" value="${escapeHtml(dashboardAnalyticsFrom)}" onchange="setDashboardAnalyticsFilter('from', this.value)" /><input class="filter-select" type="date" value="${escapeHtml(dashboardAnalyticsTo)}" onchange="setDashboardAnalyticsFilter('to', this.value)" />` : ""}
-            <button class="btn btn-sm btn-primary" onclick="exportDashboardAnalytics()"><i class="fa-solid fa-download"></i> Export</button>
+            <button class="btn btn-sm btn-primary" onclick="exportDashboardAnalytics()" ${dashboardAnalyticsExporting ? "disabled" : ""}><i class="fa-solid fa-download"></i> ${dashboardAnalyticsExporting ? "Exporting..." : "Export"}</button>
           </div>`}
         </div>
-        ${normalizedRole === "reviewer" && (!evaluatorDashboardReports || evaluatorDashboardReports.length === 0) ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No evaluator analytics data available yet.</div>` : `
+        ${normalizedRole === "reviewer" && (!evaluatorDashboardReports || evaluatorDashboardReports.length === 0) ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No evaluator analytics data available yet.</div>` : adminAnalyticsEmpty ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No analytics data available yet.</div>` : `
         <div style="height:250px; width:100%; position:relative;">
           <canvas id="submissionsChart"></canvas>
         </div>`}
@@ -9768,7 +10920,7 @@ function getRoleSpecificPanels(role) {
   const side = `
     <div class="dashboard-panel" style="background:rgba(255,255,255,0.9); backdrop-filter:blur(12px); border-radius:16px; padding:24px; border: 1px solid rgba(255,255,255,0.8); box-shadow:0 8px 30px rgba(0,0,0,0.03);">
       <h3 style="font-size:1.15rem; color:var(--navy); margin-bottom: 16px; font-weight:800;"><i class="fa-solid fa-file-export" style="color:var(--gold); margin-right:6px;"></i> Reports</h3>
-      <button class="btn btn-outline-navy" style="width:100%; justify-content:flex-start; font-weight:600;" onclick="${normalizedRole === "reviewer" ? "generateEvaluatorReport()" : "exportDashboardAnalytics()"}"><i class="fa-solid fa-chart-line" style="margin-right:8px; width:16px;"></i> Export Analytics CSV</button>
+      <button class="btn btn-outline-navy" style="width:100%; justify-content:flex-start; font-weight:600;" onclick="${normalizedRole === "reviewer" ? "generateEvaluatorReport()" : "exportDashboardAnalytics()"}" ${(normalizedRole === "reviewer" ? evaluatorReportExporting : dashboardAnalyticsExporting) ? "disabled" : ""}><i class="fa-solid fa-chart-line" style="margin-right:8px; width:16px;"></i> ${(normalizedRole === "reviewer" ? evaluatorReportExporting : dashboardAnalyticsExporting) ? "Exporting..." : "Export Analytics CSV"}</button>
     </div>`;
   return { main, side };
 }
@@ -9782,7 +10934,14 @@ function getFilteredDashboardAnalyticsSubmissions(role = currentRole) {
     rows = rows.filter((submission) => submission.status === dashboardAnalyticsStatus);
   }
   if (dashboardAnalyticsResult !== "All") {
-    rows = rows.filter((submission) => getSubmissionEvaluation(submission)?.recommendedService === dashboardAnalyticsResult);
+    const resultMap = {
+      approved_certified: ["Approved / Certified", "Approved", "Certified", "Proceed"],
+      for_revision: ["For Revision", "Revise", "Revision"],
+      rejected: ["Rejected"],
+      pending: ["Pending"],
+      no_result_yet: ["No Result Yet", "", null, undefined],
+    };
+    rows = rows.filter((submission) => resultMap[dashboardAnalyticsResult]?.includes(getSubmissionEvaluation(submission)?.result) || false);
   }
   const now = new Date();
   if (dashboardAnalyticsPeriod === "ThisYear") {
@@ -9819,23 +10978,50 @@ window.setMessageIpFilter = function(type) {
   renderDashboardContent("messages");
 };
 
-window.exportDashboardAnalytics = function() {
-  const rows = getFilteredDashboardAnalyticsSubmissions(currentRole);
-  const csvRows = [
-    ["Reference No.", "Type", "Title", "Applicant", "Date", "Status"],
-    ...rows.map((submission) => {
-      const display = getSubmissionDisplayData(submission);
-      return [submission.id, submission.type, display.title, display.applicant, submission.date, getDisplayStatusLabel(submission.status)];
-    }),
-  ];
-  downloadCsv(`portfolio_analytics_${dashboardAnalyticsType.toLowerCase().replace(/\s+/g, "_")}.csv`, csvRows);
-  addAuditLog({
-    accountName: getCurrentUser().name,
-    action: "Exported Analytics",
-    record: dashboardAnalyticsType,
-    details: `Exported ${rows.length} dashboard analytics records for ${dashboardAnalyticsPeriod}.`,
-    module: "Dashboard",
-  });
+function getPortfolioAnalyticsExportParams() {
+  const params = {
+    ip_service: dashboardAnalyticsType,
+    status: dashboardAnalyticsStatus,
+    result: dashboardAnalyticsResult,
+  };
+  const today = new Date();
+  if (dashboardAnalyticsPeriod === "ThisYear") {
+    params.year = String(today.getFullYear());
+  } else if (dashboardAnalyticsPeriod === "Last90") {
+    const from = new Date();
+    from.setDate(from.getDate() - 90);
+    params.date_from = formatLocalDateForQuery(from);
+    params.date_to = formatLocalDateForQuery(today);
+  } else if (dashboardAnalyticsPeriod === "Custom") {
+    params.date_from = dashboardAnalyticsFrom;
+    params.date_to = dashboardAnalyticsTo;
+  }
+  return params;
+}
+
+function getEvaluatorCaseExportParams() {
+  return {
+    ip_type: adminFilterType,
+    case_status: adminFilterStatus,
+    result: dashboardAnalyticsResult,
+  };
+}
+
+window.exportDashboardAnalytics = async function() {
+  if (dashboardAnalyticsExporting) return;
+  dashboardAnalyticsExporting = true;
+  renderDashboardContent("admin-dashboard");
+  try {
+    const query = buildQueryString(getPortfolioAnalyticsExportParams());
+    const fallbackFilename = `portfolio_analytics_${formatLocalDateForQuery(new Date())}.csv`;
+    await fetchBackendCsv(`reports/portfolio-analytics/export/${query}`, fallbackFilename);
+    showToast("Portfolio analytics report exported.");
+  } catch (err) {
+    showToast("Unable to export portfolio analytics report. Please try again.");
+  } finally {
+    dashboardAnalyticsExporting = false;
+    renderDashboardContent("admin-dashboard");
+  }
 };
 
 function renderFloatingAIAssistant() {
@@ -9922,67 +11108,43 @@ window.exportAIReport = function() {
   showToast("AI report exported.");
 };
 
-window.generateEvaluatorReport = function() {
-  const role = "reviewer";
-  const visibleSubmissions = getVisibleSubmissions(role);
-  
-  if (visibleSubmissions.length === 0) {
-    showToast("No cases available to generate a report.");
-    return;
+window.generateEvaluatorReport = async function() {
+  if (evaluatorReportExporting) return;
+  evaluatorReportExporting = true;
+  renderDashboardContent("reviewer-dashboard");
+  try {
+    const query = buildQueryString(getEvaluatorCaseExportParams());
+    const fallbackFilename = `evaluator_case_report_${formatLocalDateForQuery(new Date())}.csv`;
+    await fetchBackendCsv(`evaluator/export/cases/${query}`, fallbackFilename);
+    showToast("Evaluator case report exported.");
+  } catch (err) {
+    showToast("Unable to export evaluator report. Please try again.");
+  } finally {
+    evaluatorReportExporting = false;
+    renderDashboardContent("reviewer-dashboard");
   }
-
-  showToast("Generating cases report...");
-
-  // CSV Header
-  let csvContent = "Reference No.,Type,Title,Applicant,Date,Status,Assigned Evaluator\n";
-
-  // CSV Rows
-  visibleSubmissions.forEach(s => {
-    const specialist = getAssignedReviewerName(s);
-    const display = getSubmissionDisplayData(s);
-    const row = [
-      s.id,
-      s.type,
-      `"${display.title.replace(/"/g, '""')}"`,
-      `"${display.applicant.replace(/"/g, '""')}"`,
-      s.date,
-      s.status,
-      `"${specialist.replace(/"/g, '""')}"`
-    ].join(",");
-    csvContent += row + "\n";
-  });
-
-  // Download Trigger
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  const timestamp = new Date().toISOString().split('T')[0];
-  const userName = getCurrentUser(role).name.replace(/\s+/g, '_').toLowerCase();
-  
-  link.setAttribute("href", url);
-  link.setAttribute("download", `evaluator_report_${userName}_${timestamp}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-
-  addAuditLog({
-    accountName: getCurrentUser().name,
-    action: "Generated Report",
-    record: "Cases CSV",
-    details: `Evaluator ${getCurrentUser().name} downloaded a report of their visible cases.`,
-    module: "Dashboard",
-  });
 };
 
 function initCharts() {
   const lineCtx = document.getElementById("submissionsChart");
   if (lineCtx) {
-    const analyticsRows = getFilteredDashboardAnalyticsSubmissions(currentRole);
+    const isAdminAnalytics = ["admin", "superadmin"].includes(normalizeRole(currentRole));
     const monthLabels = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    const monthlyCounts = monthLabels.map((_, index) =>
-      analyticsRows.filter((submission) => new Date(submission.date).getMonth() === index).length,
-    );
+    let monthlyCounts = [];
+    if (isAdminAnalytics) {
+      monthlyCounts = monthLabels.map(() => 0);
+      adminDashboardReportState.monthlySubmissions.forEach((item) => {
+        const month = new Date(item.month);
+        if (!Number.isNaN(month.getTime())) {
+          monthlyCounts[month.getMonth()] = Number(item.count || 0);
+        }
+      });
+    } else {
+      const analyticsRows = getFilteredDashboardAnalyticsSubmissions(currentRole);
+      monthlyCounts = monthLabels.map((_, index) =>
+        analyticsRows.filter((submission) => new Date(submission.date).getMonth() === index).length,
+      );
+    }
     if (window.myLineChart) window.myLineChart.destroy();
     window.myLineChart = new Chart(lineCtx, {
       type: "line",
@@ -9990,7 +11152,7 @@ function initCharts() {
         labels: monthLabels,
         datasets: [
           {
-            label: dashboardAnalyticsType === "All" ? "IP Submissions" : `${dashboardAnalyticsType} Submissions`,
+            label: isAdminAnalytics ? "Backend Submissions" : (dashboardAnalyticsType === "All" ? "IP Submissions" : `${dashboardAnalyticsType} Submissions`),
             data: monthlyCounts,
             borderColor: "#E66B3F",
             backgroundColor: "rgba(230, 107, 63, 0.2)",
@@ -10021,20 +11183,20 @@ function initCharts() {
 
   const pieCtx = document.getElementById("typeChart");
   if (pieCtx) {
+    const isAdminAnalytics = ["admin", "superadmin"].includes(normalizeRole(currentRole));
+    const typeLabels = ["Patent", "Trademark", "Copyright", "Utility Model", "Industrial Design"];
+    const backendCounts = typeLabels.map((type) => {
+      const match = adminDashboardReportState.applicationsByIpType.find((item) => normalizeMarketplaceType(item.ip_type) === type);
+      return Number(match?.count || 0);
+    });
     if (window.myPieChart) window.myPieChart.destroy();
     window.myPieChart = new Chart(pieCtx, {
       type: "doughnut",
       data: {
-        labels: [
-          "Patent",
-          "Trademark",
-          "Copyright",
-          "Utility Model",
-          "Ind. Design",
-        ],
+        labels: typeLabels,
         datasets: [
           {
-            data: [35, 25, 20, 10, 10],
+            data: isAdminAnalytics ? backendCounts : [0, 0, 0, 0, 0],
             backgroundColor: [
               "#E66B3F",
               "#F7BEA2",
@@ -10108,6 +11270,7 @@ function renderReviewerMyCasesPage() {
   adminCaseScope = "mine";
   adminSearchQuery = "";
   return `
+    ${renderBackNav("admin-submissions", "Cases")}
     <div class="page-header">
       <h1>My Cases</h1>
       <p>Track the cases you have taken and update their status from your personal work queue.</p>
@@ -10254,14 +11417,9 @@ let dashboardAnalyticsTo = "";
 let dashboardAnalyticsStatus = "All";
 let dashboardAnalyticsApplicantType = "All";
 let dashboardAnalyticsResult = "All";
+let dashboardAnalyticsExporting = false;
+let evaluatorReportExporting = false;
 let announcementCategoryFilter = "All";
-let securityKeyVisibility = {
-  primary: false,
-  backup: false,
-};
-let integrityFreezeUnlocked = false;
-let unlockedCertifiedRecordId = null;
-let unlockedCertifiedRecordType = null;
 let certifiedDemoRecords = [
   {
     id: "PSU-PAT-2026-155",
@@ -10529,15 +11687,17 @@ window.updateEvaluatorCaseStatus = async function(id) {
   }
 
   const backendStatusMap = {
-    "Pending": "Pending",
-    "Under Review": "Under Review",
-    "Evaluated": "Evaluated",
-    "On Going": "On Going",
-    "Certified": "Certified",
+    "Pending": "pending",
+    "Under Review": "under_review",
+    "Validated": "evaluated",
+    "Evaluated": "evaluated",
+    "On Going": "on_going",
+    "Approved": "certified",
+    "Certified": "certified",
   };
   try {
-    await apiRequest(`cases/${submission.backendCaseId || submission.caseId || submission.backendId}/update-status/`, {
-      method: "POST",
+    await apiRequest(`cases/${submission.backendCaseId || submission.caseId || submission.backendId}/status/`, {
+      method: "PATCH",
       body: {
         status: backendStatusMap[selectedStatus] || selectedStatus,
         remarks: `Status changed from ${previousLabel} to ${selectedLabel}.`,
@@ -10793,15 +11953,15 @@ window.viewSubmission = async function(id) {
     try {
       const [timeline, convs] = await Promise.all([
         apiRequest(`cases/${submission.backendCaseId}/timeline/`).catch(() => []),
-        apiRequest(`messaging/conversations/`).catch(() => [])
+        apiRequest(`messages/conversations/`).catch(() => [])
       ]);
       const mappedLogs = unwrapApiList(timeline).map(t => ({
         id: t.id,
         record: id,
-        accountName: t.user_name || "System",
-        role: t.role || "system",
+        accountName: t.performed_by_name || t.user_name || "System",
+        role: t.role_visibility || t.role || "system",
         action: t.action,
-        details: t.details,
+        details: t.admin_message || t.applicant_message || t.details || "",
         module: submission.type,
         timestamp: t.created_at,
         icon: "fa-circle-info"
@@ -10811,13 +11971,13 @@ window.viewSubmission = async function(id) {
       const relatedConv = unwrapApiList(convs).find(c => c.case === submission.backendCaseId);
       if (relatedConv) {
         submission.backendConversationId = relatedConv.id;
-        const msgs = await apiRequest(`messaging/conversations/${relatedConv.id}/messages/`).catch(() => []);
+        const msgs = await apiRequest(`messages/conversations/${relatedConv.id}/messages/`).catch(() => []);
         const mappedMsgs = unwrapApiList(msgs).map(m => ({
            id: m.id,
            case_id: id,
            sender_id: m.sender,
-           message_text: m.body,
-           created_at: m.created_at,
+           message_text: m.content || m.body || "",
+           created_at: m.sent_at || m.created_at,
            is_read: m.is_read
         }));
         chatMessages.push(...mappedMsgs.filter(m => !chatMessages.some(c => c.id === m.id)));
@@ -22294,12 +23454,131 @@ function renderNQLResultsTable(query, rows) {
   `;
 }
 
-window.runNQLAssistant = function() {
+function humanizeNLQColumnName(key) {
+  return String(key || "")
+    .replace(/__+/g, " ")
+    .replace(/_+/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatNLQValue(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+}
+
+function renderBackendNLQResults(query, payload) {
+  const safeQuery = escapeHtml(query || "NLQ query");
+  const results = Array.isArray(payload?.results) ? payload.results : [];
+  const message = payload?.message || "";
+
+  if (!results.length) {
+    return `
+      <div class="nql-result-panel">
+        <div class="nql-result-header">
+          <div>
+            <span class="nql-result-kicker">Backend Query Result</span>
+            <h3>${safeQuery}</h3>
+          </div>
+          <span class="nql-result-count">0 matches</span>
+        </div>
+        <div class="nql-empty-state">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <p>${escapeHtml(message || "No matching records found.")}</p>
+        </div>
+      </div>
+    `;
+  }
+
+  const columns = Array.from(
+    results.reduce((set, row) => {
+      Object.keys(row || {}).forEach((key) => set.add(key));
+      return set;
+    }, new Set()),
+  );
+  const visibleRows = results.slice(0, 50);
+
+  return `
+    <div class="nql-result-panel">
+      <div class="nql-result-header">
+        <div>
+          <span class="nql-result-kicker">Backend Query Result</span>
+          <h3>${safeQuery}</h3>
+        </div>
+        <span class="nql-result-count">${results.length} match${results.length === 1 ? "" : "es"}</span>
+      </div>
+      <div class="nql-summary-row">
+        <span class="nql-summary-chip"><strong>${escapeHtml(payload?.intent || "matched_records")}</strong> Intent</span>
+        <span class="nql-summary-chip"><strong>${escapeHtml(results.length)}</strong> Backend records</span>
+      </div>
+      <div class="nql-table-toolbar">
+        <label for="nqlTableFilter">Filter results</label>
+        <input id="nqlTableFilter" type="search" placeholder="Search backend results" oninput="filterNQLResults(this.value)" />
+      </div>
+      <div class="nql-table-wrap">
+        <table class="nql-results-table">
+          <thead>
+            <tr>${columns.map((column) => `<th>${escapeHtml(humanizeNLQColumnName(column))}</th>`).join("")}</tr>
+          </thead>
+          <tbody>
+            ${visibleRows
+              .map(
+                (row) => `
+                  <tr data-nql-row>
+                    ${columns.map((column) => `<td>${escapeHtml(formatNLQValue(row?.[column]))}</td>`).join("")}
+                  </tr>
+                `,
+              )
+              .join("")}
+          </tbody>
+        </table>
+      </div>
+      ${results.length > visibleRows.length ? `<p class="nql-result-footnote">Showing first ${visibleRows.length} backend records.</p>` : ""}
+    </div>
+  `;
+}
+
+window.runNQLAssistant = async function() {
   const query = document.getElementById("nqlInput")?.value || "";
-  const rows = getNQLRows(query);
   const preview = document.getElementById("aiReportPreview");
   if (!preview) return;
-  preview.innerHTML = renderNQLResultsTable(query, rows);
+  if (!query.trim()) {
+    preview.innerHTML = `
+      <div class="nql-result-panel">
+        <div class="nql-empty-state">
+          <i class="fa-solid fa-magnifying-glass"></i>
+          <p>Enter a query before running the NLQ assistant.</p>
+        </div>
+      </div>
+    `;
+    return;
+  }
+  preview.innerHTML = `
+    <div class="nql-result-panel">
+      <div class="nql-empty-state">
+        <i class="fa-solid fa-spinner fa-spin"></i>
+        <p>Processing query...</p>
+      </div>
+    </div>
+  `;
+  try {
+    const payload = await apiRequest("nlq/process/", {
+      method: "POST",
+      body: { query },
+    });
+    preview.innerHTML = renderBackendNLQResults(query, payload);
+  } catch (err) {
+    preview.innerHTML = `
+      <div class="nql-result-panel">
+        <div class="nql-empty-state">
+          <i class="fa-solid fa-triangle-exclamation"></i>
+          <p>Unable to process query. Please try again.</p>
+        </div>
+      </div>
+    `;
+    showToast("Unable to process query. Please try again.");
+  }
 };
 
 window.filterNQLResults = function(value) {
@@ -22750,6 +24029,10 @@ async function submitForm() {
     const newPatentSubmission = {
       id: refNum,
       backendId: backendApplication?.id || null,
+      backendCaseId: backendApplication?.backendCaseId || backendApplication?.caseId || null,
+      caseId: backendApplication?.caseId || backendApplication?.backendCaseId || null,
+      caseNumber: backendApplication?.case_number || refNum,
+      applicationCode: backendApplication?.application_code || "",
       type: typeLabel,
       title: submittedSummary.title || `Untitled ${typeLabel} Application`,
       applicant: submittedSummary.applicant || "Unnamed Applicant",
@@ -22803,6 +24086,10 @@ async function submitForm() {
   const newSub = {
     id: refNum,
     backendId: backendApplication?.id || null,
+    backendCaseId: backendApplication?.backendCaseId || backendApplication?.caseId || null,
+    caseId: backendApplication?.caseId || backendApplication?.backendCaseId || null,
+    caseNumber: backendApplication?.case_number || refNum,
+    applicationCode: backendApplication?.application_code || "",
     type: typeMap[currentFormType],
     title: submittedSummary.title || `${typeMap[currentFormType]} Submission`,
     applicant: submittedSummary.applicant || "Unnamed Applicant",
@@ -22862,8 +24149,9 @@ async function submitForm() {
 
 // ===== MARKETPLACE =====
 function renderAdminMarketplacePage() {
-  const activeListings = marketplaceItems.filter((item) => !item.archived);
-  const archivedListings = marketplaceItems.filter((item) => item.archived);
+  ensureBackendAdminMarketplaceLoaded();
+  const activeListings = adminMarketplaceItems.filter((item) => !item.archived);
+  const archivedListings = adminMarketplaceItems.filter((item) => item.archived);
   const visibleListings =
     adminMarketplaceView === "archived" ? archivedListings : activeListings;
   const filteredListings = visibleListings
@@ -22879,6 +24167,11 @@ function renderAdminMarketplacePage() {
     type,
     count: activeListings.filter((item) => item.type === type).length,
   }));
+  const stateMessage =
+    adminMarketplaceLoadState.status === "loading"
+      ? "Loading marketplace listings..."
+      : adminMarketplaceLoadState.message;
+  const hasNoListings = adminMarketplaceLoadState.status === "loaded" && !adminMarketplaceItems.length;
   return `
     <div class="page-header">
       <h1>Market Listing</h1>
@@ -22899,6 +24192,7 @@ function renderAdminMarketplacePage() {
         <h3>${adminMarketplaceView === "archived" ? "Archived Product Listings" : "Active Product Listings"}</h3>
         <button class="btn btn-primary" onclick="showMarketListingModal()"><i class="fa-solid fa-plus"></i> Add Listing</button>
       </div>
+      ${stateMessage ? `<div style="padding:0 24px 14px;color:${adminMarketplaceLoadState.status === "error" ? "var(--red)" : "var(--gray-500)"};">${escapeHtml(stateMessage)}</div>` : ""}
       <div style="padding:0 24px 14px;display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
         <button class="filter-btn ${adminMarketplaceView === "active" ? "active" : ""}" onclick="setAdminMarketplaceView('active')">Listings (${activeListings.length})</button>
         <button class="filter-btn ${adminMarketplaceView === "archived" ? "active" : ""}" onclick="setAdminMarketplaceView('archived')">Archived (${archivedListings.length})</button>
@@ -22932,20 +24226,22 @@ function renderAdminMarketplacePage() {
                       (item) => `
                 <tr>
                   <td><strong>#${item.id}</strong></td>
-                  <td>${item.title}</td>
+                  <td>${escapeHtml(item.title)}</td>
                   <td>${typeBadge(item.type)}</td>
-                  <td>${item.inventor}</td>
+                  <td>${escapeHtml(item.inventor)}</td>
                   <td>
                     <div class="action-btns">
-                      <button class="btn btn-sm btn-outline-navy" onclick="showInnovationDetail(${item.id})"><i class="fa-solid fa-eye"></i> View</button>
-                      <button class="btn btn-sm btn-primary" onclick="showMarketListingModal(${item.id})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
-                      ${item.archived ? `<button class="btn btn-sm btn-secondary" disabled><i class="fa-solid fa-lock"></i> Read Only</button>` : `<button class="btn btn-sm btn-secondary" onclick="archiveMarketListing(${item.id})"><i class="fa-solid fa-box-archive"></i> Archive</button>`}
+                      <button class="btn btn-sm btn-outline-navy" onclick="showAdminMarketplaceDetail(${jsArg(item.id)})"><i class="fa-solid fa-eye"></i> View</button>
+                      <button class="btn btn-sm btn-primary" onclick="showMarketListingModal(${jsArg(item.id)})"><i class="fa-solid fa-pen-to-square"></i> Edit</button>
+                      ${item.archived ? `<button class="btn btn-sm btn-primary" onclick="restoreMarketListing(${jsArg(item.id)})"><i class="fa-solid fa-rotate-left"></i> Restore</button>` : ""}
+                      ${!item.archived && !item.published ? `<button class="btn btn-sm btn-primary" onclick="publishMarketListing(${jsArg(item.id)})"><i class="fa-solid fa-upload"></i> Publish</button>` : ""}
+                      ${item.archived ? "" : `<button class="btn btn-sm btn-secondary" onclick="archiveMarketListing(${jsArg(item.id)})"><i class="fa-solid fa-box-archive"></i> Archive</button>`}
                     </div>
                   </td>
                 </tr>`,
                     )
                     .join("")
-                : `<tr><td colspan="5" style="text-align:center;padding:48px;color:var(--gray-400);">No matching ${adminMarketplaceView === "archived" ? "archived" : "active"} market listings available.</td></tr>`
+                : `<tr><td colspan="5" style="text-align:center;padding:48px;color:var(--gray-400);">${hasNoListings ? "No marketplace listings created yet." : `No matching ${adminMarketplaceView === "archived" ? "archived" : "active"} market listings available.`}</td></tr>`
             }
           </tbody>
         </table>
@@ -23130,7 +24426,7 @@ function createMarketplaceApprovalRequest(record) {
 window.showMarketListingModal = function(id = null) {
   const isEdit = id !== null;
   const item = isEdit
-    ? marketplaceItems.find((entry) => entry.id === id)
+    ? adminMarketplaceItems.find((entry) => String(entry.id) === String(id))
     : {
         title: "",
         type: "Patent",
@@ -23152,7 +24448,7 @@ window.showMarketListingModal = function(id = null) {
     ? "Edit Market Listing"
     : "Add Market Listing";
   document.getElementById("modalBody").innerHTML = `
-    <form onsubmit="saveMarketListing(event, ${id === null ? "null" : id})">
+    <form onsubmit="saveMarketListing(event, ${id === null ? "null" : jsArg(id)})">
       <div class="form-row">
         <div class="form-group">
           <label>Listing Title *</label>
@@ -23172,7 +24468,7 @@ window.showMarketListingModal = function(id = null) {
       <div class="form-row">
         <div class="form-group">
           <label>Case Number *</label>
-          <input type="text" id="marketCaseNumber" value="${escapeHtml(item.caseNumber || item.sourceRecordId || "")}" ${readOnly ? "disabled" : ""} required />
+          <input type="text" id="marketCaseNumber" value="${escapeHtml(item.caseNumber || item.sourceRecordId || "")}" ${isEdit || readOnly ? "disabled" : ""} ${isEdit ? "" : "required"} />
         </div>
         <div class="form-group">
           <label>Inventor/Applicant Name *</label>
@@ -23228,89 +24524,71 @@ window.showMarketListingModal = function(id = null) {
   document.getElementById("modalOverlay").classList.add("active");
 };
 
-window.saveMarketListing = function(event, id) {
-  event.preventDefault();
+function appendMarketplacePayload(form, data) {
+  Object.entries(data).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") {
+      form.append(key, value);
+    }
+  });
+}
 
+function getMarketplaceFormPayload(id) {
   const title = document.getElementById("marketTitle").value.trim();
   const type = document.getElementById("marketType").value;
-  const caseNumber = document.getElementById("marketCaseNumber").value.trim();
+  const caseNumber = document.getElementById("marketCaseNumber")?.value.trim() || "";
   const inventor = document.getElementById("marketInventor").value.trim();
   const description = document.getElementById("marketDescription").value.trim();
   const longDescription = document.getElementById("marketLongDescription").value.trim();
   const category = document.getElementById("marketCategory").value.trim();
   const availabilityStatus = document.getElementById("marketAvailabilityStatus").value;
-  const image = document.getElementById("marketImageUrl").value.trim() || "/static/images/psu_logo_main.png";
+  const file = document.getElementById("marketImageInput")?.files?.[0] || null;
 
-  if (!title || !type || !caseNumber || !inventor || !description || !longDescription || !category || !availabilityStatus) {
+  if (!title || !type || !inventor || !description || !longDescription || !category || !availabilityStatus || (!id && !caseNumber)) {
     showToast("Please complete all required listing fields.");
-    return;
+    return null;
   }
 
-  const currentUser = getCurrentUser();
-  if (id !== null && id !== undefined && id !== "null") {
-    const entry = marketplaceItems.find((item) => item.id === id);
-    if (!entry) return;
-    Object.assign(entry, {
-      title,
-      fullTitle: entry.fullTitle || title.toUpperCase(),
-      type,
-      caseNumber,
-      inventor,
-      description,
-      longDescription,
-      category,
-      availabilityStatus,
-      contactPerson: entry.contactPerson || inventor,
-      contactEmail: entry.contactEmail || "techtransfer@psu.edu.ph",
-      image,
-      icon: entry.icon || getMarketplaceIconForType(type),
-      archived: Boolean(entry.archived),
-    });
-    addAuditLog({
-      accountName: currentUser.name,
-      action: "Updated Listing",
-      record: `Listing #${entry.id}`,
-      details: `Updated the market listing for ${entry.title}.`,
-      module: "Market Listing",
-    });
-    showToast("Market listing updated successfully.");
-  } else {
-    const nextId = marketplaceItems.length
-      ? Math.max(...marketplaceItems.map((item) => item.id)) + 1
-      : 1;
-    marketplaceItems.push({
-      id: nextId,
-      title,
-      fullTitle: title.toUpperCase(),
-      type,
-      caseNumber,
-      inventor,
-      description,
-      longDescription,
-      category,
-      availabilityStatus,
-      features: [],
-      businessPotential:
-        "Commercial potential assessment is pending admin enrichment.",
-      contactPerson: inventor,
-      contactEmail: "techtransfer@psu.edu.ph",
-      year: new Date().getFullYear(),
-      icon: getMarketplaceIconForType(type),
-      image,
-      archived: false,
-    });
-    addAuditLog({
-      accountName: currentUser.name,
-      action: "Added Listing",
-      record: `Listing #${nextId}`,
-      details: `Added a new market listing for ${title}.`,
-      module: "Market Listing",
-    });
-    showToast("Market listing added successfully.");
+  const payload = {
+    title,
+    ip_type: type,
+    inventor_name: inventor,
+    short_description: description,
+    full_description: longDescription,
+    category,
+    availability_status: availabilityStatus,
+  };
+  if (!id) payload.case_number = caseNumber;
+  if (file) {
+    const form = new FormData();
+    appendMarketplacePayload(form, payload);
+    form.append("image", file);
+    return form;
   }
+  return payload;
+}
 
-  closeModal();
-  renderDashboardContent("admin-marketplace");
+window.saveMarketListing = async function(event, id) {
+  event.preventDefault();
+
+  const normalizedId = id !== null && id !== undefined && id !== "null" ? id : null;
+  const payload = getMarketplaceFormPayload(normalizedId);
+  if (!payload) return;
+
+  try {
+    await apiRequest(
+      normalizedId ? `marketplace/admin/listings/${normalizedId}/` : "marketplace/admin/listings/",
+      {
+        method: normalizedId ? "PATCH" : "POST",
+        body: payload,
+      },
+    );
+    showToast("Market listing saved successfully.");
+    closeModal();
+    await loadBackendAdminMarketplaceListings();
+    await loadBackendMarketplace();
+  } catch (err) {
+    showToast("Unable to save marketplace listing. Please try again.");
+  }
 };
 
 window.handleMarketImageUpload = function(input) {
@@ -23497,20 +24775,64 @@ window.declineMarketplaceApproval = function(requestId) {
   renderNotifications();
 };
 
-window.archiveMarketListing = function(id) {
-  const entry = marketplaceItems.find((item) => item.id === id);
+window.archiveMarketListing = async function(id) {
+  const entry = adminMarketplaceItems.find((item) => String(item.id) === String(id));
   if (!entry) return;
   if (!confirm(`Archive market listing "${entry.title}"?`)) return;
-  entry.archived = true;
-  addAuditLog({
-    accountName: getCurrentUser().name,
-    action: "Archived Listing",
-    record: `Listing #${id}`,
-    details: `Archived the market listing for ${entry.title}.`,
-    module: "Market Listing",
-  });
-  showToast("Market listing archived.");
-  renderDashboardContent("admin-marketplace");
+  try {
+    await apiRequest(`marketplace/admin/listings/${id}/archive/`, { method: "POST" });
+    showToast("Market listing archived.");
+    await loadBackendAdminMarketplaceListings();
+    await loadBackendMarketplace();
+  } catch (err) {
+    showToast("Unable to archive marketplace listing. Please try again.");
+  }
+};
+
+window.publishMarketListing = async function(id) {
+  try {
+    await apiRequest(`marketplace/admin/listings/${id}/publish/`, { method: "POST" });
+    showToast("Market listing published.");
+    await loadBackendAdminMarketplaceListings();
+    await loadBackendMarketplace();
+  } catch (err) {
+    showToast("Unable to publish marketplace listing. Please try again.");
+  }
+};
+
+window.restoreMarketListing = async function(id) {
+  try {
+    await apiRequest(`marketplace/admin/listings/${id}/restore/`, { method: "POST" });
+    showToast("Market listing restored.");
+    await loadBackendAdminMarketplaceListings();
+    await loadBackendMarketplace();
+  } catch (err) {
+    showToast("Unable to restore marketplace listing. Please try again.");
+  }
+};
+
+window.showAdminMarketplaceDetail = function(id) {
+  const item = adminMarketplaceItems.find((entry) => String(entry.id) === String(id));
+  if (!item) {
+    showToast("Marketplace listing not found.");
+    return;
+  }
+  document.getElementById("modalTitle").textContent = item.title;
+  document.getElementById("modalBody").innerHTML = `
+    <div class="detail-panel" style="box-shadow:none;border:1px solid var(--gray-100);">
+      <div class="detail-row"><span class="label">Listing Code</span><span class="value">${escapeHtml(item.listingCode || item.listing_id || item.id)}</span></div>
+      <div class="detail-row"><span class="label">IP Type</span><span class="value">${typeBadge(item.type)}</span></div>
+      <div class="detail-row"><span class="label">Inventor / Lead</span><span class="value">${escapeHtml(item.inventor || "")}</span></div>
+      <div class="detail-row"><span class="label">Category</span><span class="value">${escapeHtml(item.category || "")}</span></div>
+      <div class="detail-row"><span class="label">Availability</span><span class="value">${escapeHtml(item.availabilityStatus || "")}</span></div>
+      <div class="detail-row"><span class="label">Status</span><span class="value">${escapeHtml(item.status || "draft")}</span></div>
+      <div class="detail-row"><span class="label">Description</span><span class="value">${escapeHtml(item.longDescription || item.description || "")}</span></div>
+    </div>
+    <div class="detail-actions" style="justify-content:flex-end;margin-top:18px;">
+      <button class="btn btn-outline-navy" onclick="closeModal()">Close</button>
+    </div>
+  `;
+  document.getElementById("modalOverlay").classList.add("active");
 };
 
 function renderMarketplace() {
@@ -23714,28 +25036,26 @@ window.toggleBookmarkedMarketplaceFilter = function() {
   renderDashboardContent("marketplace-dash");
 };
 
-window.toggleMarketplaceBookmark = function(id) {
+window.toggleMarketplaceBookmark = async function(id) {
   if (!canUseMarketplaceBookmarks()) {
     showToast("Please log in as an applicant to bookmark this listing.", "warning");
     return;
   }
   const item = marketplaceItems.find((entry) => String(entry.id) === String(id));
   if (!item) return;
-  const bookmarks = getApplicantBookmarks();
-  const existingIndex = bookmarks.findIndex((entry) => String(entry.listingId) === String(id));
-  if (existingIndex >= 0) {
-    bookmarks.splice(existingIndex, 1);
-    saveApplicantBookmarks(bookmarks);
-    showToast("Listing removed from your bookmarks.");
-  } else {
-    bookmarks.unshift({
-      listingId: String(id),
-      title: item.title,
-      type: item.type,
-      bookmarkedAt: new Date().toISOString(),
-    });
-    saveApplicantBookmarks(bookmarks);
-    showToast("Listing added to your bookmarks.");
+  const existing = getApplicantBookmark(id);
+  try {
+    if (existing) {
+      await apiRequest(`marketplace/listings/${id}/bookmark/`, { method: "DELETE" });
+      showToast("Listing removed from your bookmarks.");
+    } else {
+      await apiRequest(`marketplace/listings/${id}/bookmark/`, { method: "POST" });
+      showToast("Listing added to your bookmarks.");
+    }
+    await loadBackendMarketplaceBookmarks();
+  } catch (err) {
+    showToast(err.message || "Unable to update bookmark.", "error");
+    return;
   }
   if (currentPage === "marketplace-dash") {
     renderDashboardContent("marketplace-dash");
@@ -24025,27 +25345,34 @@ window.submitMarketplaceInquiry = async function(event, id) {
 };
 
 function renderAdminEmailsPage() {
+  ensureBackendIPOPHLEmailsLoaded();
   const ipophlEmails = getIPOPHLEmailReports();
   const filtered = ipophlEmails.filter(
-    (email) => adminEmailTypeFilter === "All" || email.ipType === adminEmailTypeFilter,
+    (email) => adminEmailTypeFilter === "All" || email.ipType === adminEmailTypeFilter || email.reportType === adminEmailTypeFilter,
   );
-  const unreadCount = ipophlEmails.filter((email) => !email.read).length;
+  const unmatchedCount = ipophlEmails.filter((email) => email.status !== "matched").length;
+  const loadError = ipophlEmailLoadState.status === "error" ? ipophlEmailLoadState.message : "";
+  const isLoading = ipophlEmailLoadState.status === "loading" || ipophlEmailLoadState.status === "idle";
   return `
     <div class="page-header">
       <h1>IPOPHL Email Reports</h1>
       <p>Official IPOPHL emails only. Marketplace and contact inquiries are shown under Inquiry Management.</p>
     </div>
     <div class="email-module-toolbar">
-      <div class="email-module-stat"><i class="fa-solid fa-bell"></i><strong>${unreadCount}</strong><span>new inquiries</span></div>
+      <div class="email-module-stat"><i class="fa-solid fa-bell"></i><strong>${unmatchedCount}</strong><span>unmatched emails</span></div>
       <select class="filter-select" onchange="setAdminEmailTypeFilter(this.value)">
         <option value="All" ${adminEmailTypeFilter === "All" ? "selected" : ""}>All IP Services</option>
         ${IP_SERVICE_TYPES.map((type) => `<option value="${type}" ${adminEmailTypeFilter === type ? "selected" : ""}>${type}</option>`).join("")}
       </select>
-      <button class="btn btn-sm btn-outline-navy" onclick="showToast('Push notifications enabled for new inquiries.')"><i class="fa-solid fa-bell"></i> Push Notifications</button>
+      <button class="btn btn-sm btn-primary" onclick="showIPOPHLEmailParseModal()"><i class="fa-solid fa-envelope-circle-check"></i> Parse Email</button>
     </div>
     <div class="email-inquiry-list">
       ${
-        filtered.length
+        loadError
+          ? `<div class="chat-empty-state"><i class="fa-solid fa-triangle-exclamation"></i><h3>${escapeHtml(loadError)}</h3></div>`
+          : isLoading
+            ? `<div class="chat-empty-state"><i class="fa-solid fa-spinner fa-spin"></i><h3>Loading IPOPHL email records...</h3></div>`
+            : filtered.length
           ? filtered.map((email) => `
             <article class="email-inquiry-card ${email.read ? "" : "unread"}">
               <div class="email-inquiry-top">
@@ -24053,36 +25380,29 @@ function renderAdminEmailsPage() {
                   <strong>${escapeHtml(email.reportType)}</strong>
                   <span>${escapeHtml(email.senderEmail)}</span>
                 </div>
-                ${typeBadge(email.ipType)}
+                <span class="badge ${email.status === "matched" ? "badge-approved" : email.status === "failed" ? "badge-rejected" : "badge-pending"}">${escapeHtml(email.status)}</span>
               </div>
               <h3>${escapeHtml(email.caseId)} - ${escapeHtml(email.subject)}</h3>
               <p>${escapeHtml(email.message)}</p>
               <div class="email-inquiry-footer">
                 <span><i class="fa-solid fa-clock"></i> Received ${escapeHtml(email.receivedAt)}</span>
-                <span class="badge ${email.daysLeft < 0 ? "badge-rejected" : email.daysLeft <= 15 ? "badge-pending" : "badge-approved"}">${email.daysLeft < 0 ? `${Math.abs(email.daysLeft)} days overdue` : `${email.daysLeft} days left`}</span>
-                <button class="btn btn-sm btn-outline-navy" onclick="markIPOPHLEmailRead('${email.id}')"><i class="fa-solid fa-envelope-open"></i> Mark Read</button>
+                ${
+                  email.daysLeft === null
+                    ? '<span class="badge badge-review">No deadline detected</span>'
+                    : `<span class="badge ${email.daysLeft < 0 ? "badge-rejected" : email.daysLeft <= 15 ? "badge-pending" : "badge-approved"}">${email.daysLeft < 0 ? `${Math.abs(email.daysLeft)} days overdue` : `${email.daysLeft} days left`}</span>`
+                }
+                <button class="btn btn-sm btn-outline-navy" onclick="showIPOPHLEmailMatchModal('${email.id}')"><i class="fa-solid fa-link"></i> Match Case</button>
               </div>
             </article>
           `).join("")
-          : `<div class="chat-empty-state"><i class="fa-solid fa-envelope"></i><h3>No IPOPHL emails found</h3><p>No official IPOPHL reports match this filter.</p></div>`
+          : `<div class="chat-empty-state"><i class="fa-solid fa-envelope"></i><h3>No IPOPHL email records found yet.</h3></div>`
       }
     </div>
   `;
 }
 
 function getIPOPHLEmailReports() {
-  const today = new Date();
-  const rows = [
-    ["IPO-EMAIL-001", "PSU-PAT-2026-002", "Patent", "Formality Report", "Formality Report for Automated Crop Pest Detector", "Missing sequence listing and revised claims formatting.", "2026-05-02", 60, false],
-    ["IPO-EMAIL-002", "PSU-UM-2026-031", "Utility Model", "Formality Report", "Formality Report for Foldable Sea Cucumber Nursery Tray", "Submit clearer technical drawings and corrected applicant address.", "2026-05-04", 45, false],
-    ["IPO-EMAIL-003", "PSU-PAT-2026-035", "Patent", "Substantive Examination Report", "Substantive Examination Report for Rainwater Microfilter Cartridge", "Respond to novelty objection and clarify claim 1.", "2026-04-22", 90, true],
-  ];
-  return rows.map(([id, caseId, ipType, reportType, subject, message, receivedAt, responseDays, read]) => {
-    const deadline = new Date(receivedAt);
-    deadline.setDate(deadline.getDate() + responseDays);
-    const daysLeft = Math.ceil((deadline - today) / (1000 * 60 * 60 * 24));
-    return { id, caseId, ipType, reportType, subject, message, receivedAt, senderEmail: "noreply@ipophil.gov.ph", deadline, daysLeft, read };
-  });
+  return ipophlEmailReports;
 }
 
 window.setAdminEmailTypeFilter = function(type) {
@@ -24090,37 +25410,110 @@ window.setAdminEmailTypeFilter = function(type) {
   renderDashboardContent("admin-emails");
 };
 
-window.markIPOPHLEmailRead = function(id) {
-  const email = getIPOPHLEmailReports().find((item) => item.id === id);
-  addAuditLog({
-    accountName: "System",
-    role: "System",
-    action: "Received IPOPHL Email",
-    record: email?.caseId || id,
-    details: email
-      ? `Received ${email.reportType} from IPOPHL.`
-      : `Received IPOPHL email ${id}.`,
-    module: "Emails",
-  });
-  showToast(`IPOPHL email ${id} marked as read.`);
-  renderDashboardContent("admin-emails");
+window.showIPOPHLEmailParseModal = function() {
+  const modalTitle = document.getElementById("modalTitle");
+  const modalBody = document.getElementById("modalBody");
+  const modalOverlay = document.getElementById("modalOverlay");
+  modalTitle.textContent = "Parse IPOPHL Email";
+  modalBody.innerHTML = `
+    <form onsubmit="submitIPOPHLEmailParse(event)">
+      <div class="form-group">
+        <label for="ipophlParseSender">Sender Email</label>
+        <input id="ipophlParseSender" type="email" required placeholder="official@ipophil.gov.ph" />
+      </div>
+      <div class="form-group">
+        <label for="ipophlParseSubject">Subject</label>
+        <input id="ipophlParseSubject" type="text" required />
+      </div>
+      <div class="form-group">
+        <label for="ipophlParseBody">Email Body</label>
+        <textarea id="ipophlParseBody" rows="8" required></textarea>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+        <button type="button" class="btn btn-outline-navy" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Parse Email</button>
+      </div>
+    </form>
+  `;
+  modalOverlay.classList.add("active");
+};
+
+window.submitIPOPHLEmailParse = async function(event) {
+  event.preventDefault();
+  const sender = document.getElementById("ipophlParseSender")?.value.trim() || "";
+  const subject = document.getElementById("ipophlParseSubject")?.value.trim() || "";
+  const body = document.getElementById("ipophlParseBody")?.value.trim() || "";
+  try {
+    await apiRequest("ipophl-email/parse/", {
+      method: "POST",
+      body: {
+        sender,
+        subject,
+        body,
+        attachments_metadata: [],
+      },
+    });
+    closeModal();
+    await loadBackendIPOPHLEmails({ rerender: false });
+    showToast("IPOPHL email parsed successfully.");
+    renderDashboardContent("admin-emails");
+  } catch (err) {
+    showToast("Unable to parse IPOPHL email. Please try again.", "error");
+  }
+};
+
+window.showIPOPHLEmailMatchModal = function(id) {
+  const email = getIPOPHLEmailReports().find((item) => String(item.id) === String(id));
+  if (!email) {
+    showToast("Unable to load IPOPHL email record. Please try again.", "error");
+    return;
+  }
+  const modalTitle = document.getElementById("modalTitle");
+  const modalBody = document.getElementById("modalBody");
+  const modalOverlay = document.getElementById("modalOverlay");
+  modalTitle.textContent = "Match IPOPHL Email to Case";
+  modalBody.innerHTML = `
+    <form onsubmit="submitIPOPHLEmailMatch(event, '${escapeHtml(email.id)}')">
+      <div class="form-group">
+        <label>Email</label>
+        <input type="text" value="${escapeHtml(email.subject)}" disabled />
+      </div>
+      <div class="form-group">
+        <label for="ipophlMatchCase">Case database ID</label>
+        <input id="ipophlMatchCase" type="number" min="1" required value="${email.matchedCaseId || ""}" />
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:12px;margin-top:20px;">
+        <button type="button" class="btn btn-outline-navy" onclick="closeModal()">Cancel</button>
+        <button type="submit" class="btn btn-primary">Match Case</button>
+      </div>
+    </form>
+  `;
+  modalOverlay.classList.add("active");
+};
+
+window.submitIPOPHLEmailMatch = async function(event, id) {
+  event.preventDefault();
+  const caseId = Number(document.getElementById("ipophlMatchCase")?.value || 0);
+  if (!caseId) {
+    showToast("Enter a valid case database ID.", "error");
+    return;
+  }
+  try {
+    await apiRequest(`ipophl-email/${id}/match/`, {
+      method: "POST",
+      body: { case: caseId },
+    });
+    closeModal();
+    await loadBackendIPOPHLEmails({ rerender: false });
+    showToast("IPOPHL email matched successfully.");
+    renderDashboardContent("admin-emails");
+  } catch (err) {
+    showToast("Unable to match IPOPHL email. Please try again.", "error");
+  }
 };
 
 
 function closeModal() {
-  if (unlockedCertifiedRecordId || unlockedCertifiedRecordType) {
-    const recordId = unlockedCertifiedRecordId || `${unlockedCertifiedRecordType} IP Records`;
-    integrityFreezeUnlocked = false;
-    unlockedCertifiedRecordId = null;
-    unlockedCertifiedRecordType = null;
-    addAuditLog({
-      accountName: getCurrentUser().name,
-      action: "Locked IP Record",
-      record: recordId,
-      details: "Certified IP record was automatically frozen again after the modal closed.",
-      module: "IP Records",
-    });
-  }
   document.getElementById("modalOverlay").classList.remove("active", "marketplace-detail-overlay");
   const modalCard = document.querySelector("#modalOverlay .modal-card");
   if (modalCard) modalCard.classList.remove("xl", "marketplace-detail-modal", "form-document-modal");
@@ -24130,27 +25523,49 @@ function closeModal() {
 }
 
 // ===== AUDIT LOG =====
-function renderAuditTableRows(logs) {
-  if (!logs.length) {
-    return '<tr><td colspan="6" style="text-align:center;padding:48px;color:var(--gray-400);">No audit entries match the current filters.</td></tr>';
+function renderAuditTableRows(logs, emptyMessage = "No audit logs recorded yet.") {
+  const safeLogs = Array.isArray(logs) ? logs : [];
+  if (!safeLogs.length) {
+    return `<tr><td colspan="8" style="text-align:center;padding:48px;color:var(--gray-400);">${escapeHtml(emptyMessage)}</td></tr>`;
   }
 
-  return logs
+  return safeLogs
     .map(
       (log) => `
         <tr>
-          <td>${escapeHtml(log.timestamp || "")}</td>
+          <td>${escapeHtml(getAuditTimestamp(log))}</td>
           <td>${escapeHtml(getAuditAccountName(log))}</td>
           <td><span class="audit-role-badge">${escapeHtml(getAuditRole(log))}</span></td>
-          <td><span class="audit-action-badge ${getAuditActionBadgeClass(log.action)}">${escapeHtml(log.action)}</span></td>
+          <td><span class="audit-action-badge ${getAuditActionBadgeClass(log?.action)}">${escapeHtml(log?.action || "—")}</span></td>
+          <td>${escapeHtml(getAuditTarget(log))}</td>
           <td>${escapeHtml(getAuditRecord(log))}</td>
           <td>${escapeHtml(getAuditDetails(log))}</td>
+          <td>${escapeHtml(getAuditIpAddress(log))}</td>
         </tr>`,
     )
     .join("");
 }
 
 function renderAuditLog() {
+  if (!getAccessToken()) {
+    window.location.href = "/admin-login/";
+    return "";
+  }
+  if (!["admin", "superadmin"].includes(normalizeRole(currentRole))) {
+    return `<div class="page-header"><h1>Audit Log</h1><p>Access denied. Admin privileges are required.</p></div>
+      <div class="chat-empty-state"><i class="fa-solid fa-lock"></i><h3>Access denied</h3><p>Admin privileges are required.</p></div>`;
+  }
+  if (auditLogsLoadStatus === "idle") {
+    ensureAuditLogsLoaded();
+  }
+  if (auditLogsLoadStatus === "idle" || auditLogsLoadStatus === "loading") {
+    return `<div class="page-header"><h1>Audit Log</h1><p>Track account activity, case handling, listings, and announcement updates.</p></div>
+      <div class="chat-empty-state"><i class="fa-solid fa-spinner fa-spin"></i><h3>Loading audit logs...</h3></div>`;
+  }
+  if (auditLogsLoadStatus === "error") {
+    return `<div class="page-header"><h1>Audit Log</h1><p>Track account activity, case handling, listings, and announcement updates.</p></div>
+      <div class="chat-empty-state"><i class="fa-solid fa-triangle-exclamation"></i><h3>${escapeHtml(auditLogsLoadMessage)}</h3></div>`;
+  }
   const visibleLogs = getVisibleAuditLogs(currentRole);
   return `
     <div class="page-header"><h1>Audit Log</h1><p>Track account activity, case handling, listings, and announcement updates.</p></div>
@@ -24158,7 +25573,7 @@ function renderAuditLog() {
       <div class="form-group"><label>From Date</label><input type="date" id="auditFrom" onchange="filterAudit()" /></div>
       <div class="form-group"><label>To Date</label><input type="date" id="auditTo" onchange="filterAudit()" /></div>
       <div class="form-group"><label>Action</label>
-        <select id="auditAction" onchange="filterAudit()"><option value="All">All Actions</option>${AUDIT_ACTION_FILTERS
+        <select id="auditAction" onchange="filterAudit()"><option value="All">All Actions</option>${getAuditActionFilters()
           .map((action) => `<option value="${action}">${action}</option>`)
           .join("")}</select></div>
       <div class="form-group"><label>People</label>
@@ -24167,21 +25582,21 @@ function renderAuditLog() {
           .join("")}</select></div>
       ${canExportAudit() ? '<button class="btn btn-primary btn-sm" style="margin-top:auto" onclick="exportCSV()"><i class="fa-solid fa-download"></i> Export CSV</button>' : ""}
     </div>
-    <div class="table-container"><div class="table-responsive"><table class="data-table" id="auditTable"><thead><tr><th>Timestamp</th><th>Account Name</th><th>Role</th><th>Action</th><th>Record</th><th>Details</th></tr></thead><tbody>
+    <div class="table-container"><div class="table-responsive"><table class="data-table" id="auditTable"><thead><tr><th>Timestamp</th><th>Account Name</th><th>Role</th><th>Action</th><th>Target</th><th>Record</th><th>Details</th><th>IP Address</th></tr></thead><tbody>
       ${renderAuditTableRows(visibleLogs)}
     </tbody></table></div></div>`;
 }
 
 function getFilteredAuditLogsFromControls() {
-  const from = document.getElementById("auditFrom").value;
-  const to = document.getElementById("auditTo").value;
-  const action = document.getElementById("auditAction").value;
-  const people = document.getElementById("auditPeople").value;
+  const from = document.getElementById("auditFrom")?.value || "";
+  const to = document.getElementById("auditTo")?.value || "";
+  const action = document.getElementById("auditAction")?.value || "All";
+  const people = document.getElementById("auditPeople")?.value || "All";
   return getVisibleAuditLogs(currentRole).filter((log) => {
-    const logDate = String(log.timestamp || "").slice(0, 10);
+    const logDate = String(getAuditTimestamp(log)).slice(0, 10);
     if (from && logDate < from) return false;
     if (to && logDate > to) return false;
-    if (action !== "All" && log.action !== action) return false;
+    if (action !== "All" && (log?.action || "—") !== action) return false;
     if (people !== "All" && getAuditRole(log) !== people) return false;
     return true;
   });
@@ -24191,7 +25606,7 @@ function filterAudit() {
   const filtered = getFilteredAuditLogsFromControls();
   const tbody = document.querySelector("#auditTable tbody");
   if (tbody) {
-    tbody.innerHTML = renderAuditTableRows(filtered);
+    tbody.innerHTML = renderAuditTableRows(filtered, "No audit logs match the current filters.");
   }
 }
 
@@ -24203,9 +25618,9 @@ function exportCSV() {
   const logsToExport = document.getElementById("auditTable")
     ? getFilteredAuditLogsFromControls()
     : getVisibleAuditLogs(currentRole);
-  let csv = "Timestamp,Account Name,Role,Action,Record,Details\n";
+  let csv = "Timestamp,Account Name,Role,Action,Target,Record,Details,IP Address\n";
   logsToExport.forEach((log) => {
-    csv += `"${log.timestamp}","${getAuditAccountName(log)}","${getAuditRole(log)}","${log.action}","${getAuditRecord(log)}","${getAuditDetails(log)}"\n`;
+    csv += `"${getAuditTimestamp(log)}","${getAuditAccountName(log)}","${getAuditRole(log)}","${log.action || "—"}","${getAuditTarget(log)}","${getAuditRecord(log)}","${getAuditDetails(log)}","${getAuditIpAddress(log)}"\n`;
   });
   const blob = new Blob([csv], { type: "text/csv" });
   const a = document.createElement("a");
@@ -24462,16 +25877,14 @@ window.submitEvaluationContent = async function(id) {
   evaluation.result = "Evaluated";
   evaluation.submittedAt = formatAuditTimestamp();
   try {
-    const payload = await apiRequest(`cases/${submission.backendCaseId || submission.caseId || submission.backendId}/submit-evaluation/`, {
+    const payload = await apiRequest(`cases/${submission.backendCaseId || submission.caseId || submission.backendId}/evaluation/`, {
       method: "POST",
       body: {
-        recommended_service: evaluation.recommendedService || "Patent",
-        note: evaluation.note,
-        next_steps: evaluation.nextSteps || "Applicant should review the evaluator recommendation.",
-        result: "Evaluated",
+        content: evaluation.note || "Evaluation content submitted.",
+        recommendation: evaluation.recommendedService || "Patent",
       },
     });
-    evaluation.submittedAt = payload.submitted_at || evaluation.submittedAt;
+    evaluation.submittedAt = payload.created_at || evaluation.submittedAt;
     await loadBackendApplications();
   } catch (err) {
     showToast(err.message || "Unable to submit evaluation to backend.", "error");
@@ -25021,29 +26434,8 @@ function renderAdminRecords() {
       <div class="ip-records-security-copy">
         <p><strong>Certified Records Archive</strong> - All records below have been certified and their metadata is <strong>frozen for protection</strong>. Certified records can be viewed and published to the marketplace, but cannot be edited.</p>
       </div>
-      ${renderCertifiedRecordUnlockControls()}
     </div>
     ${renderAdminRecordsTable()}`;
-}
-
-function renderCertifiedRecordUnlockControls() {
-  return `<div class="ip-records-unlock-controls">
-    <div class="certified-record-type-entry">
-      <select id="certifiedRecordUnlockType" aria-label="Select IP type to unlock">
-        <option value="" ${!unlockedCertifiedRecordType ? "selected" : ""}>IP Type to unlock</option>
-        <option value="Patent" ${unlockedCertifiedRecordType === "Patent" ? "selected" : ""}>Patent</option>
-        <option value="Trademark" ${unlockedCertifiedRecordType === "Trademark" ? "selected" : ""}>Trademark</option>
-        <option value="Copyright" ${unlockedCertifiedRecordType === "Copyright" ? "selected" : ""}>Copyright</option>
-        <option value="Industrial Design" ${unlockedCertifiedRecordType === "Industrial Design" ? "selected" : ""}>Industrial Design</option>
-        <option value="Utility Model" ${unlockedCertifiedRecordType === "Utility Model" ? "selected" : ""}>Utility Model</option>
-      </select>
-    </div>
-    <div class="certified-archive-key-entry">
-      <input id="certifiedArchiveEncryptionKey" type="password" placeholder="Encryption Key" autocomplete="off" onkeydown="if(event.key === 'Enter') unlockCertifiedRecordFromArchive()" />
-      <div id="certifiedArchiveKeyError" class="error-msg certified-record-key-error">Invalid Encryption Key.</div>
-    </div>
-    <button class="btn btn-primary btn-sm" onclick="unlockCertifiedRecordFromArchive()"><i class="fa-solid fa-unlock-keyhole"></i> Unlock & View</button>
-  </div>`;
 }
 
 function getSortedCertifiedAdminRecords() {
@@ -25090,6 +26482,7 @@ function renderAdminRecordsTable() {
         <td>${statusBadge(s.status)}</td>
         <td><span class="badge badge-frozen"><i class="fa-solid fa-lock"></i> Read-only</span></td>
         <td><div class="action-btns">
+          <button class="btn btn-sm btn-outline-navy" onclick="viewCertifiedRecord('${s.id}')"><i class="fa-solid fa-eye"></i> View</button>
           ${
             !marketplaceListing
               ? marketplaceRequest?.status === "pending"
@@ -25140,32 +26533,12 @@ function findCertifiedRecord(id) {
 }
 
 window.viewCertifiedRecord = function(id) {
-  if (unlockedCertifiedRecordId && unlockedCertifiedRecordId !== id) {
-    integrityFreezeUnlocked = false;
-    unlockedCertifiedRecordId = null;
-  }
-
   const match = findCertifiedRecord(id);
   if (!match) {
     showToast("Certified record not found.");
     return;
   }
   const record = match.record;
-  const recordUnlocked =
-    integrityFreezeUnlocked &&
-    (unlockedCertifiedRecordId === record.id ||
-      unlockedCertifiedRecordType === record.type);
-  const canUnlockCertifiedRecord = ["superadmin", "admin"].includes(
-    normalizeRole(currentRole),
-  );
-  if (!recordUnlocked) {
-    const typeSelect = document.getElementById("certifiedRecordUnlockType");
-    const keyInput = document.getElementById("certifiedArchiveEncryptionKey");
-    if (typeSelect) typeSelect.value = record.type;
-    keyInput?.focus();
-    showToast("Select the IP Type and enter the Encryption Key to unlock and view records.");
-    return;
-  }
   const marketplaceListing = findMarketplaceListingByRecordId(record.id);
   const marketplaceRequest = getLatestMarketplaceApprovalRequest(record.id);
   const marketplaceStatus = marketplaceListing
@@ -25192,158 +26565,15 @@ window.viewCertifiedRecord = function(id) {
       <div class="detail-row"><span class="label">Department</span><span class="value">${escapeHtml(record.department)}</span></div>
       <div class="detail-row"><span class="label">Date Filed</span><span class="value">${escapeHtml(record.date || "Not recorded")}</span></div>
       <div class="detail-row"><span class="label">Status</span><span class="value">${statusBadge(record.status)}</span></div>
-      <div class="detail-row"><span class="label">Integrity</span><span class="value">${recordUnlocked ? '<span class="badge badge-review"><i class="fa-solid fa-unlock"></i> Unlocked</span>' : '<span class="badge badge-frozen"><i class="fa-solid fa-lock"></i> Frozen</span>'}</span></div>
+      <div class="detail-row"><span class="label">Integrity</span><span class="value"><span class="badge badge-frozen"><i class="fa-solid fa-lock"></i> Read-only</span></span></div>
       <div class="detail-row"><span class="label">Marketplace</span><span class="value">${marketplaceStatus}</span></div>
       <div class="detail-row"><span class="label">Description</span><span class="value">${escapeHtml(record.description || "No description recorded.")}</span></div>
     </div>
     <div class="detail-actions" style="justify-content:flex-end; margin-top:18px;">
       <button class="btn btn-outline-navy" onclick="closeModal()">Close</button>
-      ${
-        canUnlockCertifiedRecord
-          ? `<button class="btn btn-secondary" onclick="lockCertifiedIPRecord('${record.id}')"><i class="fa-solid fa-lock"></i> Lock IP</button>`
-          : ""
-      }
       ${marketplaceAction}
     </div>`;
   document.getElementById("modalOverlay").classList.add("active");
-};
-
-function showUnlockedCertifiedTypeRecords(type) {
-  const records = getSortedCertifiedAdminRecords().filter(
-    (record) => record.type === type,
-  );
-  if (records.length === 0) {
-    showToast(`No certified ${type} records available.`);
-    return;
-  }
-
-  document.getElementById("modalTitle").textContent = `${type} Records Unlocked`;
-  document.getElementById("modalBody").innerHTML = `
-    <div class="detail-panel" style="box-shadow:none; border:1px solid var(--gray-100);">
-      <h3><i class="fa-solid fa-unlock"></i> Select a certified ${escapeHtml(type)} record to view</h3>
-      <div class="table-responsive" style="margin-top:14px;">
-        <table class="data-table">
-          <thead><tr><th>Reference</th><th>Title</th><th>Owner</th><th>Action</th></tr></thead>
-          <tbody>
-            ${records
-              .map(
-                (record) => `<tr>
-                  <td>${escapeHtml(record.id)}</td>
-                  <td>${escapeHtml(record.title)}</td>
-                  <td>${escapeHtml(record.applicant)}</td>
-                  <td><button class="btn btn-sm btn-outline-navy" onclick="viewCertifiedRecord('${record.id}')"><i class="fa-solid fa-eye"></i> Open Record</button></td>
-                </tr>`,
-              )
-              .join("")}
-          </tbody>
-        </table>
-      </div>
-    </div>
-    <div class="detail-actions" style="justify-content:flex-end; margin-top:18px;">
-      <button class="btn btn-secondary" onclick="closeModal()"><i class="fa-solid fa-lock"></i> Lock IP Type</button>
-    </div>`;
-  document.getElementById("modalOverlay").classList.add("active");
-}
-
-window.unlockCertifiedRecordFromArchive = function() {
-  const typeSelect = document.getElementById("certifiedRecordUnlockType");
-  const keyInput = document.getElementById("certifiedArchiveEncryptionKey");
-  const keyError = document.getElementById("certifiedArchiveKeyError");
-  const selectedType = typeSelect?.value;
-  const records = getCertifiedAdminRecords().filter(
-    (record) => record.type === selectedType,
-  );
-  if (!selectedType) {
-    typeSelect?.focus();
-    showToast("Select an IP type to unlock.");
-    return;
-  }
-  if (records.length === 0) {
-    showToast(`No certified ${selectedType} records available.`);
-    return;
-  }
-  if (!verifyEncryptionKey(keyInput?.value)) {
-    keyInput?.classList.add("input-error");
-    keyError?.classList.add("show");
-    keyInput?.focus();
-    addAuditLog({
-      accountName: getCurrentUser().name,
-      action: "Failed IP Record Unlock",
-      record: `${selectedType} IP Records`,
-      details: `Admin entered an invalid encryption key while unlocking ${selectedType} records.`,
-      module: "IP Records",
-    });
-    showToast("Invalid Encryption Key.");
-    return;
-  }
-
-  keyInput?.classList.remove("input-error");
-  keyError?.classList.remove("show");
-  integrityFreezeUnlocked = true;
-  unlockedCertifiedRecordId = null;
-  unlockedCertifiedRecordType = selectedType;
-  addAuditLog({
-    accountName: getCurrentUser().name,
-    action: "Unlocked IP Records",
-    record: `${selectedType} IP Records`,
-    details: `${selectedType} certified records were unlocked from the archive header for admin review.`,
-    module: "IP Records",
-  });
-  showToast(`${selectedType} records unlocked.`);
-  showUnlockedCertifiedTypeRecords(selectedType);
-};
-
-window.unlockCertifiedIPRecord = function(id) {
-  const match = findCertifiedRecord(id);
-  if (!match) {
-    showToast("Certified record not found.");
-    return;
-  }
-
-  const keyInput = document.getElementById("certifiedRecordEncryptionKey");
-  const keyError = document.getElementById("certifiedRecordKeyError");
-  if (!verifyEncryptionKey(keyInput?.value)) {
-    keyInput?.classList.add("input-error");
-    keyError?.classList.add("show");
-    keyInput?.focus();
-    addAuditLog({
-      accountName: getCurrentUser().name,
-      action: "Failed IP Record Unlock",
-      record: id,
-      details: "Admin entered an invalid encryption key for a certified IP record.",
-      module: "IP Records",
-    });
-    showToast("Invalid Encryption Key.");
-    return;
-  }
-
-  integrityFreezeUnlocked = true;
-  unlockedCertifiedRecordId = id;
-  unlockedCertifiedRecordType = null;
-  addAuditLog({
-    accountName: getCurrentUser().name,
-    action: "Unlocked IP Record",
-    record: id,
-    details: "Certified IP record was temporarily unfrozen for admin review.",
-    module: "IP Records",
-  });
-  showToast("IP record temporarily unlocked.");
-  viewCertifiedRecord(id);
-};
-
-window.lockCertifiedIPRecord = function(id) {
-  integrityFreezeUnlocked = false;
-  unlockedCertifiedRecordId = null;
-  unlockedCertifiedRecordType = null;
-  addAuditLog({
-    accountName: getCurrentUser().name,
-    action: "Locked IP Record",
-    record: id,
-    details: "Certified IP record was manually frozen again.",
-    module: "IP Records",
-  });
-  showToast("IP record frozen and locked.");
-  closeModal();
 };
 
 window.editCertifiedRecord = function(id) {
@@ -25605,13 +26835,6 @@ function legacyRenderRolePermissions() {
           cl: "✗",
         },
         { action: "System configuration", sa: "✓", pa: "✗", rv: "✗", cl: "✗" },
-        {
-          action: "Encryption key management",
-          sa: "✓",
-          pa: "✗",
-          rv: "✗",
-          cl: "✗",
-        },
       ],
     },
   ];
@@ -26295,13 +27518,6 @@ function renderRolePermissions() {
           rv: "deny",
           cl: "deny",
         },
-        {
-          action: "Encryption key management",
-          sa: "check",
-          pa: "deny",
-          rv: "deny",
-          cl: "deny",
-        },
       ],
     },
   ];
@@ -26330,42 +27546,32 @@ function renderRolePermissions() {
 }
 
 function renderAdminSettings() {
-  const primaryKey = getDisplaySecurityKey("primary");
-  const backupKey = getDisplaySecurityKey("backup");
-  return `<div class="page-header"><h1>System Settings</h1><p>Administrative configuration and security controls.</p></div>
-    <div class="detail-layout">
+  ensureBackendSystemConfigLoaded();
+  const config = adminSystemConfigState.data || EMPTY_SYSTEM_CONFIG;
+  const isLoading = adminSystemConfigState.status === "loading";
+  const statusMessage = isLoading
+    ? "Loading system configuration..."
+    : adminSystemConfigState.message;
+  const notificationValue = config.notification_email_enabled ? "Enabled" : "Disabled";
+  return `<div class="page-header"><h1>System Settings</h1><p>Administrative configuration.</p></div>
+    <div class="detail-layout" style="grid-template-columns:minmax(0,1fr);">
       <div class="detail-panel">
         <h3><i class="fa-solid fa-gear"></i> System Configuration</h3>
-        <div class="form-group"><label>System Name</label><input type="text" value="The Creator's Bulwark" /></div>
-        <div class="form-group"><label>Institution</label><input type="text" value="Palawan State University" /></div>
-        <div class="form-group"><label>Admin Email</label><input type="email" value="ipo@psu.palawan.edu.ph" /></div>
+        ${statusMessage ? `<div class="form-hint" style="margin-bottom:14px;color:${adminSystemConfigState.status === "error" ? "var(--red)" : "var(--gray-500)"}">${escapeHtml(statusMessage)}</div>` : ""}
+        <div class="form-group"><label>System Name</label><input id="adminSystemName" type="text" value="${escapeHtml(config.system_name)}" readonly /></div>
+        <div class="form-group"><label>Institution</label><input id="adminInstitution" type="text" value="${escapeHtml(config.institution)}" readonly /></div>
+        <div class="form-group"><label>Admin Email</label><input id="adminConfigEmail" type="email" value="${escapeHtml(config.admin_email)}" readonly /></div>
         <div class="form-group"><label>Notification Email</label>
-          <select><option selected>Enabled</option><option>Disabled</option></select></div>
-        <button class="btn btn-primary" onclick="showToast('System configuration saved')"><i class="fa-solid fa-save"></i> Save Settings</button>
-      </div>
-      <div class="detail-panel">
-        <h3><i class="fa-solid fa-key"></i> Encryption Key Management</h3>
-        <div class="detail-row"><span class="label">Primary Key</span><span class="value" style="display:flex; align-items:center; gap:10px;">${primaryKey}<button class="btn btn-sm btn-outline-navy" type="button" onclick="toggleSecurityKeyVisibility('primary')"><i class="fa-solid fa-${securityKeyVisibility.primary ? "eye-slash" : "eye"}"></i></button></span></div>
-        <div class="detail-row"><span class="label">Backup Key</span><span class="value" style="display:flex; align-items:center; gap:10px;">${backupKey}<button class="btn btn-sm btn-outline-navy" type="button" onclick="toggleSecurityKeyVisibility('backup')"><i class="fa-solid fa-${securityKeyVisibility.backup ? "eye-slash" : "eye"}"></i></button></span></div>
-        <div class="detail-row"><span class="label">Rotation Policy</span><span class="value">Quarterly</span></div>
-        <div class="detail-actions">
-          <button class="btn btn-primary btn-sm" onclick="showToast('Key rotation scheduled')"><i class="fa-solid fa-arrows-rotate"></i> Rotate Keys</button>
-          <button class="btn btn-secondary btn-sm" onclick="showToast('Key escrow report generated')"><i class="fa-solid fa-file-shield"></i> Escrow Report</button>
+          <select id="adminNotificationEmail" disabled>
+            <option ${notificationValue === "Enabled" ? "selected" : ""}>Enabled</option>
+            <option ${notificationValue === "Disabled" ? "selected" : ""}>Disabled</option>
+          </select>
         </div>
+        <div class="form-hint" style="margin-bottom:12px;color:var(--gray-500)">System configuration update endpoint is not available yet.</div>
+        <button class="btn btn-primary" type="button" disabled title="System configuration update endpoint is not available yet."><i class="fa-solid fa-save"></i> Save Settings</button>
       </div>
     </div>`;
 }
-
-window.toggleSecurityKeyVisibility = function(type) {
-  securityKeyVisibility[type] = !securityKeyVisibility[type];
-  renderDashboardContent("admin-settings");
-};
-
-window.unlockIntegrityFreeze = function() {
-  integrityFreezeUnlocked = false;
-  showToast("Certified IP records are read-only and cannot be edited.");
-  renderDashboardContent(currentPage === "submission-detail" ? "submission-detail" : "admin-records");
-};
 
 window.filterAnnouncementCategory = function(category) {
   announcementCategoryFilter = category;
@@ -26677,13 +27883,14 @@ window.toggleProfileDropdown = function () {
 
 // ===== ANNOUNCEMENTS =====
 function renderAdminAnnouncementsPage() {
+  ensureBackendAdminAnnouncementsLoaded();
   const categories = Array.from(
-    new Set(announcements.map((item) => item.category)),
+    new Set(adminAnnouncements.map((item) => item.category)),
   ).sort();
   const visibleAnnouncements =
     announcementCategoryFilter === "All"
-      ? announcements
-      : announcements.filter(
+      ? adminAnnouncements
+      : adminAnnouncements.filter(
           (announcement) => announcement.category === announcementCategoryFilter,
         );
   return `
@@ -26719,19 +27926,24 @@ function renderAdminAnnouncementsPage() {
             </tr>
           </thead>
           <tbody>
-            ${visibleAnnouncements.length ? visibleAnnouncements.map(a => `
+            ${
+              adminAnnouncementsLoadState.status === "error"
+                ? `<tr><td colspan="4" style="text-align:center;padding:40px;">${escapeHtml(adminAnnouncementsLoadState.message)}</td></tr>`
+                : adminAnnouncementsLoadState.status === "loading" || adminAnnouncementsLoadState.status === "idle"
+                  ? '<tr><td colspan="4" style="text-align:center;padding:40px;">Loading announcements...</td></tr>'
+                  : visibleAnnouncements.length ? visibleAnnouncements.map(a => `
               <tr>
-                <td>${a.date}</td>
-                <td><span class="badge ${a.category === "Alert" ? "badge-rejected" : a.category === "Event" ? "badge-review" : "badge-approved"}">${a.category}</span></td>
-                <td><strong>${a.title}</strong></td>
+                <td>${escapeHtml(a.date)}</td>
+                <td><span class="badge ${a.category === "Alert" ? "badge-rejected" : a.category === "Event" ? "badge-review" : "badge-approved"}">${escapeHtml(a.category)}</span></td>
+                <td><strong>${escapeHtml(a.title)}</strong></td>
                 <td>
                   <div class="action-btns">
-                    <button class="btn btn-sm btn-outline-navy" onclick="showAnnouncementModal(${a.id})"><i class="fa-solid fa-edit"></i> Edit</button>
-                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAnnouncement(${a.id})"><i class="fa-solid fa-trash"></i> Delete</button>
+                    <button class="btn btn-sm btn-outline-navy" onclick="showAnnouncementModal(${jsArg(a.id)})"><i class="fa-solid fa-edit"></i> Edit</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteAnnouncement(${jsArg(a.id)})"><i class="fa-solid fa-trash"></i> Delete</button>
                   </div>
                 </td>
               </tr>
-            `).join('') : '<tr><td colspan="4" style="text-align:center;padding:40px;">No announcements found.</td></tr>'}
+            `).join('') : '<tr><td colspan="4" style="text-align:center;padding:40px;">No announcements posted yet.</td></tr>'}
           </tbody>
         </table>
       </div>
@@ -26741,8 +27953,13 @@ function renderAdminAnnouncementsPage() {
 window.showAnnouncementModal = function(id = null) {
   const isEdit = id !== null;
   const announcementCategories = ["System Updates", "IPOPHL Reminders", "Maintenance Notices", "Application Guidelines", "General Announcements"];
-  const a = isEdit ? announcements.find(item => item.id === id) : { title: '', content: '', category: 'General Announcements', date: new Date().toISOString().split('T')[0], image: '' };
   const isAdmin = normalizeRole(currentRole) === 'admin' || normalizeRole(currentRole) === 'superadmin';
+  const sourceAnnouncements = isAdmin && adminAnnouncements.length ? adminAnnouncements : announcements;
+  const a = isEdit ? sourceAnnouncements.find(item => String(item.id) === String(id)) : { title: '', content: '', category: 'General Announcements', date: new Date().toISOString().split('T')[0], image: '', isPublished: true };
+  if (isEdit && !a) {
+    showToast("Unable to load announcement. Please try again.", "error");
+    return;
+  }
 
   const modalBody = document.getElementById('modalBody');
   const modalTitle = document.getElementById('modalTitle');
@@ -26754,12 +27971,12 @@ window.showAnnouncementModal = function(id = null) {
     modalBody.innerHTML = `
       <div style="padding: 10px;">
         <div style="display: flex; gap: 10px; margin-bottom: 20px;">
-          <span class="ann-badge ${a.category.toLowerCase()}">${a.category}</span>
-          <span style="font-size: 0.85rem; color: var(--gray-400); font-weight: 600;">Published on ${a.date}</span>
+          <span class="ann-badge ${a.category.toLowerCase()}">${escapeHtml(a.category)}</span>
+          <span style="font-size: 0.85rem; color: var(--gray-400); font-weight: 600;">Published on ${escapeHtml(a.date)}</span>
         </div>
-        <h2 style="font-size: 1.5rem; color: var(--navy); margin-bottom: 16px; font-weight: 800; line-height: 1.3;">${a.title}</h2>
+        <h2 style="font-size: 1.5rem; color: var(--navy); margin-bottom: 16px; font-weight: 800; line-height: 1.3;">${escapeHtml(a.title)}</h2>
         <div style="background: var(--gray-50); padding: 24px; border-radius: 16px; color: var(--gray-700); line-height: 1.8; font-size: 1rem; border: 1px solid var(--gray-100);">
-          ${a.content.replace(/\n/g, '<br>')}
+          ${escapeHtml(a.content).replace(/\n/g, '<br>')}
         </div>
         <div style="margin-top: 30px; text-align: right;">
           <button class="btn btn-navy" onclick="closeModal()">Close Notice</button>
@@ -26772,15 +27989,15 @@ window.showAnnouncementModal = function(id = null) {
 
   modalTitle.innerText = isEdit ? 'Edit Announcement' : 'Add New Announcement';
   modalBody.innerHTML = `
-    <form id="announcementForm" onsubmit="saveAnnouncement(event, ${id === null ? 'null' : id})">
+    <form id="announcementForm" onsubmit="saveAnnouncement(event, ${id === null ? 'null' : jsArg(id)})">
       <div class="form-group" style="margin-bottom: 20px;">
         <label style="display: block; margin-bottom: 8px; font-weight: 600; color: var(--navy);">Title</label>
-        <input type="text" id="annTitle" value="${a.title}" required style="width: 100%; padding: 10px; border: 1.5px solid var(--gray-200); border-radius: 8px;" />
+        <input type="text" id="annTitle" value="${escapeHtml(a.title)}" required style="width: 100%; padding: 10px; border: 1.5px solid var(--gray-200); border-radius: 8px;" />
       </div>
       <div class="form-group" style="margin-bottom: 20px;">
         <label style="display: block; margin-bottom: 8px; font-weight: 600; color: var(--navy);">Category</label>
         <select id="annCategory" style="width: 100%; padding: 10px; border: 1.5px solid var(--gray-200); border-radius: 8px;">
-          ${announcementCategories.map((category) => `<option ${a.category === category ? "selected" : ""}>${category}</option>`).join("")}
+          ${announcementCategories.map((category) => `<option ${a.category === category ? "selected" : ""}>${escapeHtml(category)}</option>`).join("")}
         </select>
       </div>
       <div class="form-group" style="margin-bottom: 20px;">
@@ -26799,7 +28016,13 @@ window.showAnnouncementModal = function(id = null) {
       </div>
       <div class="form-group" style="margin-bottom: 20px;">
         <label style="display: block; margin-bottom: 8px; font-weight: 600; color: var(--navy);">Content</label>
-        <textarea id="annContent" rows="4" required style="width: 100%; padding: 10px; border: 1.5px solid var(--gray-200); border-radius: 8px; font-family: inherit;">${a.content}</textarea>
+        <textarea id="annContent" rows="4" required style="width: 100%; padding: 10px; border: 1.5px solid var(--gray-200); border-radius: 8px; font-family: inherit;">${escapeHtml(a.content)}</textarea>
+      </div>
+      <div class="form-group" style="margin-bottom: 20px;">
+        <label style="display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--navy);">
+          <input type="checkbox" id="annPublished" ${a.isPublished === false ? "" : "checked"} />
+          Published
+        </label>
       </div>
       <div style="display:flex; justify-content:flex-end; gap:12px; margin-top:24px;">
         <button type="button" class="btn btn-outline-navy" onclick="closeModal()">Cancel</button>
@@ -26824,92 +28047,57 @@ window.handleAnnImageUpload = function(input) {
   }
 };
 
-window.saveAnnouncement = function(e, id) {
+window.saveAnnouncement = async function(e, id) {
   e.preventDefault();
-  const title = document.getElementById('annTitle').value;
-  const category = document.getElementById('annCategory').value;
-  const date = document.getElementById('annDate').value;
-  const content = document.getElementById('annContent').value;
-  const image = document.getElementById('annImageUrl').value || '/static/images/psu_logo_main.png';
-  let savedAnnouncement = null;
-  let shouldNotifyAlert = false;
+  const title = document.getElementById('annTitle')?.value.trim() || "";
+  const category = document.getElementById('annCategory')?.value || "General Announcements";
+  const content = document.getElementById('annContent')?.value.trim() || "";
+  const isPublished = document.getElementById('annPublished')?.checked !== false;
+  const isEdit = id !== null && id !== undefined && id !== 'null';
+  const existing = isEdit ? adminAnnouncements.find((item) => String(item.id) === String(id)) : null;
 
-  if (id !== null && id !== undefined && id !== 'null') {
-    const idx = announcements.findIndex(a => a.id == id);
-    if (idx !== -1) {
-      const previous = announcements[idx];
-      announcements[idx] = { ...announcements[idx], title, category, date, content, image };
-      savedAnnouncement = announcements[idx];
-      shouldNotifyAlert =
-        category === "Alert" &&
-        (previous.category !== category ||
-          previous.title !== title ||
-          previous.content !== content ||
-          previous.date !== date);
-      addAuditLog({
-        accountName: getCurrentUser().name,
-        action: "Updated Announcement",
-        record: announcements[idx].title,
-        details: `Updated the ${category.toLowerCase()} announcement scheduled for ${date}.`,
-        module: "Announcements",
-      });
-      showToast('Announcement updated successfully');
-    }
-  } else {
-    const newId = announcements.length ? Math.max(...announcements.map(a => a.id)) + 1 : 1;
-    savedAnnouncement = { id: newId, title, category, date, content, image };
-    announcements.push(savedAnnouncement);
-    shouldNotifyAlert = category === "Alert";
-    addAuditLog({
-      accountName: getCurrentUser().name,
-      action: "Published Announcement",
-      record: `ANN-${new Date().getFullYear()}-${String(newId).padStart(3, "0")}`,
-      details: `Published a new ${category.toLowerCase()} announcement: ${title}.`,
-      module: "Announcements",
+  if (!title || !content) {
+    showToast("Please complete the announcement title and content.");
+    return;
+  }
+
+  try {
+    await apiRequest(isEdit ? `announcements/${existing?.backendId || id}/` : "announcements/", {
+      method: isEdit ? "PATCH" : "POST",
+      body: {
+        title,
+        category,
+        content,
+        is_published: isPublished,
+      },
     });
-    showToast('Announcement created successfully');
+    await Promise.allSettled([loadBackendAdminAnnouncements(), loadBackendAnnouncements()]);
+    if (category === "Alert") dismissedTopAlertId = null;
+    closeModal();
+    renderLandingAnnouncements();
+    refreshSystemAlertForCurrentPage();
+    showToast("Announcement saved successfully.");
+    renderDashboardContent('admin-announcements');
+  } catch (err) {
+    showToast("Unable to save announcement. Please try again.", "error");
   }
-
-  if (category === "Alert") {
-    dismissedTopAlertId = null;
-  }
-  if (shouldNotifyAlert && savedAnnouncement) {
-    pushRoleNotification("applicant", {
-      icon: "fa-triangle-exclamation",
-      color: "#ef4444",
-      title: `Alert: ${savedAnnouncement.title}`,
-      body: savedAnnouncement.content,
-      type: "announcement-alert",
-      category: "System Notice",
-      announcementId: savedAnnouncement.id,
-    });
-  }
-
-  closeModal();
-  renderLandingAnnouncements();
-  refreshSystemAlertForCurrentPage();
-  renderDashboardContent('admin-announcements');
 };
 
-window.deleteAnnouncement = function(id) {
-  if (confirm('Are you sure you want to delete this announcement?')) {
-    const idx = announcements.findIndex(a => a.id === id);
-    const deleted = announcements[idx];
-    announcements.splice(idx, 1);
-    if (deleted) {
-      addAuditLog({
-        accountName: getCurrentUser().name,
-        action: "Deleted Announcement",
-        record: deleted.title,
-        details: `Deleted the ${deleted.category.toLowerCase()} announcement dated ${deleted.date}.`,
-        module: "Announcements",
-      });
-    }
-    showToast('Announcement deleted');
+window.deleteAnnouncement = async function(id) {
+  if (!confirm('Are you sure you want to delete this announcement?')) return;
+  const existing = adminAnnouncements.find((item) => String(item.id) === String(id));
+  try {
+    await apiRequest(`announcements/${existing?.backendId || id}/`, {
+      method: "DELETE",
+    });
+    await Promise.allSettled([loadBackendAdminAnnouncements(), loadBackendAnnouncements()]);
+    if (existing?.category === "Alert") dismissedTopAlertId = null;
     renderLandingAnnouncements();
-    if (deleted?.category === "Alert") dismissedTopAlertId = null;
     refreshSystemAlertForCurrentPage();
+    showToast('Announcement deleted');
     renderDashboardContent('admin-announcements');
+  } catch (err) {
+    showToast("Unable to delete announcement. Please try again.", "error");
   }
 };
 
@@ -27008,13 +28196,21 @@ function normalizeSubmissionWorkflowDefaults() {
   });
 }
 
-const loadedStoredSubmissions = loadStoredSubmissions();
-rebalanceDemoActiveCases({ force: !loadedStoredSubmissions });
-seedDashboardSampleCases({ force: !loadedStoredSubmissions });
-seedRevisionDemoData();
+const loadedStoredSubmissions = false;
 normalizeSubmissionWorkflowDefaults();
 syncAllSubmissionDisplayFields();
-persistSubmissions();
+
+function clearPrototypeSeedData() {
+  announcements.splice(0, announcements.length);
+  marketplaceItems.splice(0, marketplaceItems.length);
+  submissions.splice(0, submissions.length);
+  systemUsers.splice(0, systemUsers.length);
+  marketplaceApprovalRequests.splice(0, marketplaceApprovalRequests.length);
+  marketplaceInquiries.splice(0, marketplaceInquiries.length);
+  Object.keys(mockNotifications).forEach((role) => {
+    mockNotifications[role] = [];
+  });
+}
 
 function getInitialPageFromUrl() {
   if (typeof window === "undefined") return "landing";
@@ -27026,6 +28222,12 @@ function getInitialPageFromUrl() {
   const hashRouteMap = {
     admin: "admin-login",
     "admin-login": "admin-login",
+    "admin-dashboard": "admin-dashboard",
+    "system-config": "admin-settings",
+    "admin-settings": "admin-settings",
+    "audit-log": "audit-log",
+    "ip-records": "admin-records",
+    "admin-records": "admin-records",
     evaluator: "evaluator-login",
     "evaluator-login": "evaluator-login",
     reviewer: "evaluator-login",
@@ -27053,10 +28255,12 @@ function getInitialPageFromUrl() {
     "admin-dashboard": "admin-dashboard",
     evaluator: "evaluator-login",
     "evaluator-login": "evaluator-login",
-    "evaluator-dashboard": "reviewer-my-cases",
+    "evaluator-dashboard": "reviewer-dashboard",
+    "evaluator-my-cases": "reviewer-my-cases",
     reviewer: "evaluator-login",
     "reviewer-login": "evaluator-login",
-    "reviewer-dashboard": "reviewer-my-cases",
+    "reviewer-dashboard": "reviewer-dashboard",
+    "reviewer-my-cases": "reviewer-my-cases",
     applicant: "login",
     "applicant-login": "login",
     "applicant-dashboard": "user-dashboard",
@@ -27089,8 +28293,10 @@ function getInitialPageFromUrl() {
 
 // ===== INIT =====
 document.addEventListener("DOMContentLoaded", async () => {
+  initApplicationInfoGuides();
   bindApplicantSessionActivityListeners();
   const initialPage = getInitialPageFromUrl();
+  clearPrototypeSeedData();
   await initializeBackendConnection();
   navigateTo(initialPage);
 });

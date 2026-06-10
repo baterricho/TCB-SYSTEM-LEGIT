@@ -5,7 +5,7 @@ from .models import EncryptionKey, KeyActivityLog
 
 class EncryptionKeySerializer(serializers.ModelSerializer):
     masked_key_material = serializers.SerializerMethodField()
-    created_by_email = serializers.EmailField(source="created_by.email", read_only=True)
+    created_by_email = serializers.EmailField(source="created_by.email", read_only=True, default="")
 
     class Meta:
         model = EncryptionKey
@@ -34,7 +34,7 @@ class RotateEncryptionKeySerializer(serializers.Serializer):
 
 class KeyActivityLogSerializer(serializers.ModelSerializer):
     key_code = serializers.CharField(source="key.key_code", read_only=True)
-    performed_by_email = serializers.EmailField(source="performed_by.email", read_only=True)
+    performed_by_email = serializers.EmailField(source="performed_by.email", read_only=True, default="")
 
     class Meta:
         model = KeyActivityLog

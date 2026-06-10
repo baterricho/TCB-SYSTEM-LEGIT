@@ -1,3 +1,4 @@
+from django.shortcuts import get_object_or_404
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -26,6 +27,7 @@ class EmailParseViewSet(viewsets.ReadOnlyModelViewSet):
         data = EmailParseSerializer(parse).data
         if message:
             data["detail"] = message
+        create_audit_log(request, request.user, "ipophl_email.processed", parse.subject, "Admin processed IPOPHL email.")
         return Response(data, status=201)
 
     @action(detail=True, methods=["post"], url_path="match")
@@ -33,7 +35,7 @@ class EmailParseViewSet(viewsets.ReadOnlyModelViewSet):
         parse = self.get_object()
         serializer = MatchEmailSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        case = Case.objects.get(pk=serializer.validated_data["case"])
+        case = get_object_or_404(Case, pk=serializer.validated_data["case"])
         parse.matched_case = case
         parse.case_number_detected = case.case_number
         parse.status = EmailParse.Status.MATCHED

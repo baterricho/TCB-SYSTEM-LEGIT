@@ -19,7 +19,7 @@ class EncryptionKeyViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = EncryptionKeySerializer
     queryset = EncryptionKey.objects.select_related("created_by").all()
     filterset_fields = ("status", "is_primary", "is_backup")
-    search_fields = ("key_id", "key_name", "algorithm")
+    search_fields = ("key_code", "key_name", "algorithm")
 
     @action(detail=False, methods=["post"], url_path="generate")
     def generate_key(self, request):
@@ -55,4 +55,7 @@ class EncryptionKeyViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], url_path="activity-logs")
     def activity_logs(self, request):
         logs = KeyActivityLog.objects.select_related("key", "performed_by").all()
+        page = self.paginate_queryset(logs)
+        if page is not None:
+            return self.get_paginated_response(KeyActivityLogSerializer(page, many=True).data)
         return Response(KeyActivityLogSerializer(logs, many=True).data)
