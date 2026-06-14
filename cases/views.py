@@ -57,9 +57,17 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
             raise PermissionDenied("Only evaluators can view available cases.")
         ensure_cases_for_submitted_applications()
         try:
-            request.user.evaluator_profile
+            profile = request.user.evaluator_profile
         except CustomUser.evaluator_profile.RelatedObjectDoesNotExist:
-            pass
+            return Response(
+                {"detail": "No evaluator profile found for this account.", "code": "no_profile"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not profile.is_available:
+            return Response(
+                {"detail": "Your evaluator profile is currently set to unavailable.", "code": "unavailable"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         cases = [
             case for case in Case.objects.select_related("application", "applicant", "assigned_evaluator")
             .filter(

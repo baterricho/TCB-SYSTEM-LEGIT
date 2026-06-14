@@ -29,6 +29,12 @@ let marketplaceBookmarks = [];
 let dismissedTopAlertId = null;
 let evaluatorDashboardStats = null;
 let evaluatorDashboardReports = null;
+let evaluatorDashboardError = "";
+let evaluatorAvailableCases = [];
+let evaluatorMyCases = [];
+let evaluatorAvailableCasesError = "";
+let evaluatorMyCasesError = "";
+let notificationsLoadError = "";
 const IP_SERVICE_TYPES = ["Patent", "Trademark", "Copyright", "Utility Model", "Industrial Design"];
 const CORE_CASE_STATUSES = ["Under Review", "Validated", "On Going"];
 const EVALUATOR_STATUS_OPTIONS = [
@@ -1632,7 +1638,7 @@ async function loadBackendApplications() {
   const role = normalizeRole(currentRole);
   
   try {
-    const backendNotifs = await apiRequest("notifications/").catch(() => []);
+    const backendNotifs = await apiRequest("notifications/");
     const mappedNotifs = unwrapApiList(backendNotifs).map(n => ({
       id: n.id,
       icon: "fa-bell",
@@ -1644,59 +1650,33 @@ async function loadBackendApplications() {
       category: "Notification",
     }));
     mockNotifications[role] = mappedNotifs;
+    notificationsLoadError = "";
   } catch (e) {
-    console.error("Notifications fetch failed");
+    mockNotifications[role] = [];
+    notificationsLoadError = e.message || "Could not load notifications.";
+    console.error("Notifications fetch failed", e);
   }
 
   if (role === "reviewer") {
     try {
-      const [available, myCases, dashboardSummary, reports] = await Promise.all([
-        apiRequest("cases/available/").catch(() => []),
-        apiRequest("cases/my-cases/").catch(() => []),
-        apiRequest("evaluator/dashboard-summary/").catch(() => null),
-        apiRequest("evaluator/reports/cases-by-status/").catch(() => null),
+      const [dashboardSummary, reports] = await Promise.all([
+        apiRequest("evaluator/dashboard-summary/"),
+        apiRequest("evaluator/reports/cases-by-status/"),
       ]);
-      
-      if (dashboardSummary) evaluatorDashboardStats = dashboardSummary;
-      if (reports) evaluatorDashboardReports = reports;
-      
-      const mergedCases = [...unwrapApiList(available), ...unwrapApiList(myCases)];
-      
-      const mappedApplications = mergedCases.map(c => {
-         const app = c.application || {};
-         return {
-            ...app,
-            backendCaseId: c.id,
-            caseId: c.id,
-            id: c.case_number || c.id,
-            case_number: c.case_number || "",
-            application_code: c.application_code || app.application_code || "",
-            transaction_code: c.case_number || c.application_code || app.application_code || app.transaction_code,
-            assigned_evaluator: c.taken_by || c.assigned_evaluator,
-            evaluator_name: c.evaluator_name,
-            status: c.status,
-            evaluation: {
-               recommended_service: c.evaluator_recommendation,
-               result: c.evaluation_summary,
-            },
-            deadline: c.deadline,
-            priority_score: c.priority_score,
-            priority_label: c.priority_label,
-            ip_type: app.ip_type || c.ip_type,
-            title: app.title || c.title,
-            created_by_name: c.applicant_name || app.created_by_name,
-            applicant_email: c.applicant_email || app.applicant_email,
-            created_by: c.applicant || app.created_by
-         };
-      });
-      mergeBackendApplications(mappedApplications);
-    } catch(err) {
-      console.error(err);
+      evaluatorDashboardStats = dashboardSummary;
+      evaluatorDashboardReports = reports;
+      evaluatorDashboardError = "";
+    } catch (err) {
+      evaluatorDashboardStats = null;
+      evaluatorDashboardReports = null;
+      evaluatorDashboardError = err.message || "Evaluator dashboard data unavailable.";
     }
+    await Promise.allSettled([loadAvailableCases(), loadMyCases()]);
+    syncEvaluatorCaseSubmissions();
   } else {
     const [applicationsPayload, casesPayload] = await Promise.all([
-      apiRequest("applications/").catch(() => []),
-      apiRequest("cases/my-cases/").catch(() => []),
+      apiRequest("applications/"),
+      apiRequest("cases/my-cases/"),
     ]);
     const caseApplications = unwrapApiList(casesPayload).map((c) => {
       const app = c.application || {};
@@ -1723,6 +1703,76 @@ async function loadBackendApplications() {
     });
     mergeBackendApplications([...unwrapApiList(applicationsPayload), ...caseApplications]);
   }
+}
+
+function mapBackendCaseToSubmission(caseRecord) {
+  const application = caseRecord.application || {};
+  return mapBackendApplication({
+    ...application,
+    backendCaseId: caseRecord.id,
+    case_id: caseRecord.id,
+    case_number: caseRecord.case_number || "",
+    application_code: caseRecord.application_code || application.application_code || "",
+    assigned_evaluator: caseRecord.taken_by || caseRecord.assigned_evaluator,
+    evaluator_name: caseRecord.evaluator_name,
+    status: caseRecord.status,
+    evaluation: {
+      recommended_service: caseRecord.evaluator_recommendation,
+      result: caseRecord.evaluation_summary,
+    },
+    deadline: caseRecord.deadline,
+    priority_score: caseRecord.priority_score,
+    priority_label: caseRecord.priority_label,
+    ip_type: application.ip_type || caseRecord.ip_type,
+    title: application.title || caseRecord.title,
+    created_by_name: caseRecord.applicant_name || application.created_by_name,
+    applicant_email: caseRecord.applicant_email || application.applicant_email,
+    created_by: caseRecord.applicant || application.created_by,
+  });
+}
+
+function resolveEvaluatorCasesError(err) {
+  const code = err?.payload?.code || "";
+  if (err?.status === 403 && code === "no_profile") {
+    return "No evaluator profile found for this account. Contact an administrator.";
+  }
+  if (err?.status === 403 && code === "unavailable") {
+    return "Your evaluator profile is currently set to unavailable.";
+  }
+  if (err?.status === 401) return "Your session has expired. Please log in again.";
+  return err?.message || "Unable to load evaluator cases.";
+}
+
+async function loadAvailableCases() {
+  try {
+    const payload = await apiRequest("cases/available/");
+    evaluatorAvailableCases = unwrapApiList(payload).map(mapBackendCaseToSubmission);
+    evaluatorAvailableCasesError = "";
+    return evaluatorAvailableCases;
+  } catch (err) {
+    evaluatorAvailableCases = [];
+    evaluatorAvailableCasesError = resolveEvaluatorCasesError(err);
+    throw err;
+  }
+}
+
+async function loadMyCases() {
+  try {
+    const payload = await apiRequest("cases/my-cases/");
+    evaluatorMyCases = unwrapApiList(payload).map(mapBackendCaseToSubmission);
+    evaluatorMyCasesError = "";
+    return evaluatorMyCases;
+  } catch (err) {
+    evaluatorMyCases = [];
+    evaluatorMyCasesError = resolveEvaluatorCasesError(err);
+    throw err;
+  }
+}
+
+function syncEvaluatorCaseSubmissions() {
+  submissions.splice(0, submissions.length, ...evaluatorAvailableCases, ...evaluatorMyCases);
+  normalizeSubmissionWorkflowDefaults();
+  syncAllSubmissionDisplayFields();
 }
 
 async function loadBackendUsers() {
@@ -1797,8 +1847,14 @@ async function createBackendApplication(submittedSummary, typeLabel) {
     method: "POST",
     body: payload,
   });
+  const prepared = await apiRequest(`applications/${application.id}/prepare-case/`, {
+    method: "POST",
+  });
+  await uploadBackendApplicationDocuments(prepared.case_id);
   const submitted = await apiRequest(`applications/${application.id}/submit/`, { method: "POST" });
-  await uploadBackendApplicationDocuments(submitted.case_id);
+  if (!submitted.case_id || !submitted.case_number) {
+    throw new Error(submitted.detail || "Submission succeeded but no Case was created.");
+  }
   return {
     ...application,
     status: "Submitted",
@@ -1818,8 +1874,13 @@ async function uploadBackendApplicationDocuments(caseId) {
     const rawFiles = Array.isArray(upload?._rawFiles) ? upload._rawFiles : [];
     for (const file of rawFiles) {
       const form = new FormData();
+      const normalizedKey = key.toLowerCase();
+      const documentType =
+        normalizedKey.includes("receipt") ? "Receipt"
+        : normalizedKey.includes("drawing") || normalizedKey.includes("view") ? "Drawing"
+        : "Support";
       form.append("file", file);
-      form.append("document_type", key.toLowerCase().includes("receipt") ? "Receipt" : "Support");
+      form.append("document_type", documentType);
       if (caseId) form.append("case", caseId);
       await apiRequest("documents/", {
         method: "POST",
@@ -3203,15 +3264,13 @@ function getCurrentRoleNotifications(role = currentRole) {
 
 window.clearCurrentRoleNotifications = async function() {
   const normalizedRole = normalizeRole(currentRole);
-  const activeUser = getCurrentUser();
   try {
     await apiRequest("notifications/clear/", { method: "POST" });
     mockNotifications[normalizedRole] = [];
     await loadBackendApplications();
   } catch (err) {
-    mockNotifications[normalizedRole] = (mockNotifications[normalizedRole] || []).filter(
-      (notification) => notification.userId && activeUser && notification.userId !== activeUser.id,
-    );
+    showToast(err.message || "Could not clear notifications.", "error");
+    return;
   }
   renderNotifications();
   showToast("Notifications cleared.", "success");
@@ -5650,10 +5709,15 @@ function isChatNotification(notification) {
 
 async function markNotificationRead(notification) {
   if (!notification) return;
-  notification.read = true;
   if (notification.id && getAccessToken()) {
-    apiRequest(`notifications/${notification.id}/read/`, { method: "PATCH" }).catch(() => {});
+    try {
+      await apiRequest(`notifications/${notification.id}/read/`, { method: "PATCH" });
+    } catch (err) {
+      showToast(err.message || "Could not mark notification as read.", "error");
+      return;
+    }
   }
+  notification.read = true;
   renderNotifications();
 }
 
@@ -5850,6 +5914,12 @@ function renderNotifications() {
   const headerCount = document.getElementById("notifHeaderCount");
   if (headerCount) {
     headerCount.innerText = `${unreadCount} ${unreadCount === 1 ? "alert" : "alerts"}`;
+  }
+
+  if (notificationsLoadError) {
+    list.innerHTML =
+      `<div style="padding:40px 20px;text-align:center;color:var(--danger);font-size:.85rem;"><i class="fa-solid fa-triangle-exclamation" style="display:block;font-size:1.5rem;margin-bottom:12px;"></i>${escapeHtml(notificationsLoadError)}</div>`;
+    return;
   }
 
   if (roleNotifs.length === 0) {
@@ -6436,9 +6506,8 @@ window.verifySignupOtp = async function() {
     showToast("This OTP has expired. Please request a new code.", "warning");
     return;
   }
-  let verifyPayload = null;
   try {
-    verifyPayload = await apiRequest("auth/verify-otp/", {
+    await apiRequest("auth/verify-otp/", {
       method: "POST",
       auth: false,
       body: { email: pendingSignupData.email, otp_code: code, purpose: "registration" },
@@ -6450,14 +6519,10 @@ window.verifySignupOtp = async function() {
     return;
   }
   
-  const newUser = createApplicantUserFromSignup(pendingSignupData);
   const verifiedEmail = pendingSignupData.email;
   const verifiedName = pendingSignupData.fullName;
-  
-  const backendUser = applyAuthPayload(verifyPayload);
-  if (!backendUser) systemUsers.push(newUser);
 
-  isLoggedIn = Boolean(backendUser);
+  isLoggedIn = false;
   currentRole = "applicant";
   selectedLoginRole = "applicant";
   updateTopbarRole();
@@ -6470,7 +6535,7 @@ window.verifySignupOtp = async function() {
   );
   
   pendingSignupData = null;
-  navigateTo(backendUser ? "user-dashboard" : "login");
+  navigateTo("login");
   const loginEmail = document.getElementById("loginEmail");
   const loginPassword = document.getElementById("loginPassword");
   if (loginEmail) loginEmail.value = verifiedEmail;
@@ -6861,14 +6926,6 @@ async function startLogin(e, requestedRole = selectedLoginRole) {
       if (backendUser?.name) {
         setTimeout(() => showToast(`Prototype Access: Logged in as ${backendUser.name}`, "success"), 250);
       }
-      return;
-    }
-
-    if (loginRole !== "applicant") {
-      const message = "Login did not return a valid session. Please try again.";
-      showError("loginPasswordError", message);
-      showToast(message, "error");
-      setLoginSubmitting(false);
       return;
     }
 
@@ -9444,10 +9501,10 @@ window.confirmCopyrightPaymentValidation = async function(submissionId) {
           description: [details, note].filter(Boolean).join("\n\n"),
         },
       });
-      await apiRequest(`cases/${submission.backendCaseId}/status/`, {
-        method: "PATCH",
+      await apiRequest(`cases/${submission.backendCaseId}/update-status/`, {
+        method: "POST",
         body: { status: "evaluated", remarks: "Copyright payment assessment issued." },
-      }).catch(() => null);
+      });
       const conversation = await apiRequest("messages/conversations/", {
         method: "POST",
         body: { case: submission.backendCaseId },
@@ -10783,20 +10840,20 @@ function getRoleSpecificStats(role) {
         },
       ] : [
         {
-          label: "Cases",
-          value: total,
-          icon: "fa-briefcase",
+          label: "Available Cases",
+          value: "—",
+          icon: "fa-folder-open",
           color: "blue",
         },
         {
-          label: "Completed Reviews",
-          value: approvedCount,
-          icon: "fa-check-circle",
+          label: "My Cases",
+          value: "—",
+          icon: "fa-briefcase",
           color: "green",
         },
         {
           label: "Pending Action",
-          value: pending,
+          value: "—",
           icon: "fa-clock",
           color: "yellow",
         },
@@ -10881,7 +10938,7 @@ function getRoleSpecificPanels(role) {
             <button class="btn btn-sm btn-primary" onclick="exportDashboardAnalytics()" ${dashboardAnalyticsExporting ? "disabled" : ""}><i class="fa-solid fa-download"></i> ${dashboardAnalyticsExporting ? "Exporting..." : "Export"}</button>
           </div>`}
         </div>
-        ${normalizedRole === "reviewer" && (!evaluatorDashboardReports || evaluatorDashboardReports.length === 0) ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No evaluator analytics data available yet.</div>` : adminAnalyticsEmpty ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No analytics data available yet.</div>` : `
+        ${normalizedRole === "reviewer" && evaluatorDashboardError ? `<div style="text-align:center;padding:40px;color:var(--danger);">${escapeHtml(evaluatorDashboardError)}</div>` : normalizedRole === "reviewer" && (!evaluatorDashboardReports || evaluatorDashboardReports.length === 0) ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No evaluator analytics data available yet.</div>` : adminAnalyticsEmpty ? `<div style="text-align:center;padding:40px;color:var(--gray-400);">No analytics data available yet.</div>` : `
         <div style="height:250px; width:100%; position:relative;">
           <canvas id="submissionsChart"></canvas>
         </div>`}
@@ -11228,16 +11285,8 @@ function getScopedReviewerSubmissions(scope = adminCaseScope, role = currentRole
   const normalizedRole = normalizeRole(role);
   let visible = [...getVisibleSubmissions(role)];
   if (normalizedRole !== "reviewer") return visible;
-  if (scope === "mine") {
-    return visible.filter((submission) =>
-      isAssignedReviewerSubmission(submission, role),
-    );
-  }
-  if (scope === "queue") {
-    return visible.filter(
-      (submission) => !isAssignedReviewerSubmission(submission, role),
-    );
-  }
+  if (scope === "mine") return [...evaluatorMyCases];
+  if (scope === "queue") return [...evaluatorAvailableCases];
   return visible;
 }
 
@@ -11299,6 +11348,9 @@ function renderAdminSubmissionsTable(filterType, filterStatus, searchQuery) {
 
   const isMyCasesView = adminCaseScope === "mine";
   const hideReviewerQueueStatus = normalizeRole(currentRole) === "reviewer" && adminCaseScope === "queue";
+  const reviewerEmptyMessage = isMyCasesView
+    ? evaluatorMyCasesError || "You have not taken any cases yet."
+    : evaluatorAvailableCasesError || "No available cases found.";
   if (reviewerMode) {
     filtered.sort(compareReviewerDeadlines);
   }
@@ -11345,7 +11397,7 @@ function renderAdminSubmissionsTable(filterType, filterStatus, searchQuery) {
       }</tr></thead><tbody>
         ${
           filtered.length === 0
-            ? `<tr><td colspan="${reviewerMode ? "7" : hideReviewerQueueStatus ? "6" : isMyCasesView || normalizeRole(currentRole) === "reviewer" ? "7" : "8"}" style="text-align:center;padding:50px;color:var(--gray-400);"><i class="fa-solid fa-inbox" style="font-size:2.5rem;display:block;margin-bottom:12px;"></i>${reviewerMode && isMyCasesView ? "You have not taken any cases yet." : reviewerMode ? "No available cases found." : "No submissions match your criteria."}</td></tr>`
+            ? `<tr><td colspan="${reviewerMode ? "7" : hideReviewerQueueStatus ? "6" : isMyCasesView || normalizeRole(currentRole) === "reviewer" ? "7" : "8"}" style="text-align:center;padding:50px;color:var(--gray-400);"><i class="fa-solid fa-inbox" style="font-size:2.5rem;display:block;margin-bottom:12px;"></i>${reviewerMode ? escapeHtml(reviewerEmptyMessage) : "No submissions match your criteria."}</td></tr>`
             : filtered
                 .map(
                   (s) => {
@@ -11603,8 +11655,9 @@ async function takeCase(id) {
 
   const previousStatus = sub.status;
   try {
-    const response = await apiRequest(`cases/${sub.backendCaseId || sub.caseId || sub.backendId}/take/`, { method: "POST" });
-    await loadBackendApplications();
+    await apiRequest(`cases/${sub.backendCaseId || sub.caseId || sub.backendId}/take/`, { method: "POST" });
+    await Promise.all([loadAvailableCases(), loadMyCases()]);
+    syncEvaluatorCaseSubmissions();
   } catch (err) {
     showToast(err.message || "Unable to take this case.", "error");
     return;
@@ -11696,14 +11749,15 @@ window.updateEvaluatorCaseStatus = async function(id) {
     "Certified": "certified",
   };
   try {
-    await apiRequest(`cases/${submission.backendCaseId || submission.caseId || submission.backendId}/status/`, {
-      method: "PATCH",
+    await apiRequest(`cases/${submission.backendCaseId || submission.caseId || submission.backendId}/update-status/`, {
+      method: "POST",
       body: {
         status: backendStatusMap[selectedStatus] || selectedStatus,
         remarks: `Status changed from ${previousLabel} to ${selectedLabel}.`,
       },
     });
-    await loadBackendApplications();
+    await loadMyCases();
+    syncEvaluatorCaseSubmissions();
   } catch (err) {
     showToast(err.message || "Unable to update backend status.", "error");
     return;
@@ -11952,8 +12006,8 @@ window.viewSubmission = async function(id) {
   if (submission.backendCaseId) {
     try {
       const [timeline, convs] = await Promise.all([
-        apiRequest(`cases/${submission.backendCaseId}/timeline/`).catch(() => []),
-        apiRequest(`messages/conversations/`).catch(() => [])
+        apiRequest(`cases/${submission.backendCaseId}/timeline/`),
+        apiRequest(`messages/conversations/`)
       ]);
       const mappedLogs = unwrapApiList(timeline).map(t => ({
         id: t.id,
@@ -11971,7 +12025,7 @@ window.viewSubmission = async function(id) {
       const relatedConv = unwrapApiList(convs).find(c => c.case === submission.backendCaseId);
       if (relatedConv) {
         submission.backendConversationId = relatedConv.id;
-        const msgs = await apiRequest(`messages/conversations/${relatedConv.id}/messages/`).catch(() => []);
+        const msgs = await apiRequest(`messages/conversations/${relatedConv.id}/messages/`);
         const mappedMsgs = unwrapApiList(msgs).map(m => ({
            id: m.id,
            case_id: id,
@@ -11984,6 +12038,7 @@ window.viewSubmission = async function(id) {
       }
     } catch(err) {
       console.warn("Unable to fetch timeline/messages", err);
+      showToast(err.message || "Unable to load case activity and messages.", "error");
     }
   }
 
@@ -24014,6 +24069,7 @@ async function submitForm() {
     }
   } catch (err) {
     showToast(`Backend save failed: ${err.message}`, "error");
+    return;
   }
 
   const refNum = backendApplication?.transaction_code || generatedRefNum;

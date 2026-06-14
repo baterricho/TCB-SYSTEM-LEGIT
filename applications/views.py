@@ -69,3 +69,22 @@ class IPApplicationViewSet(viewsets.ModelViewSet):
             },
             status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
+
+    @action(detail=True, methods=["post"], url_path="prepare-case")
+    def prepare_case(self, request, pk=None):
+        application = self.get_object()
+        if request.user.role != "applicant" or application.applicant_id != request.user.id:
+            raise PermissionDenied("You can prepare only your own application.")
+        if application.status != IPApplication.Status.DRAFT:
+            raise ValidationError("Only draft applications can prepare document uploads.")
+        case, created = ApplicationSubmissionService.ensure_case(application)
+        return Response(
+            {
+                "application_id": application.id,
+                "application_code": application.application_code,
+                "case_id": case.id,
+                "case_number": case.case_number,
+                "case_created": created,
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
+        )

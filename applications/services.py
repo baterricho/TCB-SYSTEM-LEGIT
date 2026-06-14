@@ -126,17 +126,10 @@ class CompletenessService:
 
 class ApplicationSubmissionService:
     @staticmethod
-    @transaction.atomic
-    def submit(application, request=None):
-        was_already_submitted = application.status == IPApplication.Status.SUBMITTED
-        if not was_already_submitted:
-            CompletenessService.ensure_submittable(application)
-            application.status = IPApplication.Status.SUBMITTED
-            application.submitted_at = timezone.now()
-            application.save(update_fields=["status", "submitted_at"])
+    def ensure_case(application):
         from cases.models import Case
 
-        case, created = Case.objects.get_or_create(
+        return Case.objects.get_or_create(
             application=application,
             defaults={
                 "applicant": application.applicant,
@@ -150,6 +143,18 @@ class ApplicationSubmissionService:
                 "priority_label": Case.PriorityLabel.NORMAL,
             },
         )
+
+    @staticmethod
+    @transaction.atomic
+    def submit(application, request=None):
+        was_already_submitted = application.status == IPApplication.Status.SUBMITTED
+        if not was_already_submitted:
+            CompletenessService.ensure_submittable(application)
+            application.status = IPApplication.Status.SUBMITTED
+            application.submitted_at = timezone.now()
+            application.save(update_fields=["status", "submitted_at"])
+
+        case, created = ApplicationSubmissionService.ensure_case(application)
         if created:
             admins = application.applicant.__class__.objects.filter(role="admin", status="active")
             for admin in admins:

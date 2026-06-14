@@ -140,6 +140,7 @@ class EndpointContractsAndRBACTests(TestCase):
         self.assertEqual(case.taken_by, evaluator)
         self.assertEqual(case.status, Case.Status.UNDER_REVIEW)
         self.assertIsNotNone(case.deadline)
+        self.assertEqual((case.deadline - case.taken_at).days, 90)
 
         available_response = self.client.get("/api/cases/available/")
         available_cases = available_response.data["results"] if isinstance(available_response.data, dict) else available_response.data
@@ -181,6 +182,59 @@ class EndpointContractsAndRBACTests(TestCase):
         available_cases = response.data["results"] if isinstance(response.data, dict) else response.data
         self.assertEqual(len(available_cases), 1)
         self.assertEqual(available_cases[0]["id"], case.id)
+
+    def test_available_cases_rejects_evaluator_without_profile(self):
+        evaluator = create_user("no-profile-evaluator@example.com", role=CustomUser.Role.EVALUATOR)
+
+        self.client.force_authenticate(evaluator)
+        response = self.client.get("/api/cases/available/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "no_profile")
+
+    def test_available_cases_rejects_unavailable_evaluator(self):
+        evaluator = create_user("unavailable-evaluator@example.com", role=CustomUser.Role.EVALUATOR)
+        EvaluatorProfile.objects.create(
+            user=evaluator,
+            specialization=EvaluatorProfile.Specialization.PATENT_MECHANICAL,
+            is_available=False,
+        )
+
+        self.client.force_authenticate(evaluator)
+        response = self.client.get("/api/cases/available/")
+
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.data["code"], "unavailable")
+
+    def test_applicant_can_prepare_hidden_case_for_draft_document_uploads(self):
+        applicant = create_user("draft-upload-applicant@example.com")
+        evaluator = create_user("draft-upload-evaluator@example.com", role=CustomUser.Role.EVALUATOR)
+        EvaluatorProfile.objects.create(
+            user=evaluator,
+            specialization=EvaluatorProfile.Specialization.INDUSTRIAL_DESIGN,
+            is_available=True,
+        )
+        application = IPApplication.objects.create(
+            applicant=applicant,
+            ip_type=IPApplication.IPType.INDUSTRIAL_DESIGN,
+            title="Draft industrial design",
+            description="A draft that needs drawings before submission.",
+            declaration_accepted=True,
+        )
+
+        self.client.force_authenticate(applicant)
+        prepare_response = self.client.post(f"/api/applications/{application.id}/prepare-case/")
+
+        self.assertEqual(prepare_response.status_code, 201)
+        case = Case.objects.get(application=application)
+        self.assertEqual(prepare_response.data["case_id"], case.id)
+        self.assertEqual(case.status, Case.Status.PENDING)
+        self.assertFalse(case.is_taken)
+
+        self.client.force_authenticate(evaluator)
+        available_response = self.client.get("/api/cases/available/")
+        available_cases = available_response.data["results"] if isinstance(available_response.data, dict) else available_response.data
+        self.assertEqual(available_cases, [])
 
     def test_messages_contract_alias_saves_messages_for_case_participants(self):
         applicant = create_user("message-applicant@example.com")
