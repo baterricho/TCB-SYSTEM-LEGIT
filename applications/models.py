@@ -24,7 +24,7 @@ class IPApplication(models.Model):
 
     id = models.BigAutoField(primary_key=True, db_column="application_id")
     application_code = models.CharField(max_length=40, unique=True, editable=False)
-    applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name="ip_applications", db_column="applicant_id")
+    applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="ip_applications", db_column="applicant_id")
     ip_type = models.CharField(max_length=30, choices=IPType.choices)
     title = models.CharField(max_length=255)
     description = models.TextField(blank=True)
@@ -45,7 +45,6 @@ class IPApplication(models.Model):
         db_table = "ip_application"
         ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=["application_code"]),
             models.Index(fields=["applicant"]),
             models.Index(fields=["ip_type"]),
             models.Index(fields=["status"]),

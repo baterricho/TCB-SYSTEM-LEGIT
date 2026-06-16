@@ -4,7 +4,7 @@ from .models import IPOPHLEmailParse
 
 
 class EmailParseSerializer(serializers.ModelSerializer):
-    matched_case_number = serializers.CharField(source="matched_case.case_number", read_only=True)
+    matched_case_number = serializers.CharField(source="matched_case.case_number", read_only=True, default="")
 
     class Meta:
         model = IPOPHLEmailParse

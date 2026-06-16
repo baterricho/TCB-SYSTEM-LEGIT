@@ -125,11 +125,11 @@ class NLQService:
             qs = Inquiry.objects.all()
             qs, date_filters = apply_date_filter(qs, text, "created_at")
             filters.update(date_filters)
-            results = list(qs.order_by("-popularity_count").values("inquiry_id", "subject", "popularity_count", "status")[:100])
+            results = list(qs.order_by("-popularity_count").values("id", "subject", "popularity_count", "status")[:100])
         elif "unanswered marketplace inquiries" in text:
             intent = "unanswered_marketplace_inquiries"
             qs = Inquiry.objects.filter(status=Inquiry.Status.NEW, category__icontains="marketplace")
-            results = list(qs.values("inquiry_id", "subject", "email", "created_at")[:100])
+            results = list(qs.values("id", "subject", "email", "created_at")[:100])
         elif "handled by" in text and "case" in text:
             intent = "cases_by_evaluator"
             name = re.split(r"handled by", text, maxsplit=1)[-1].strip().rstrip(".")

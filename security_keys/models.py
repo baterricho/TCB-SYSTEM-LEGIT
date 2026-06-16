@@ -32,6 +32,9 @@ class EncryptionKey(models.Model):
             models.Index(fields=["status"]),
             models.Index(fields=["is_primary"]),
         ]
+        constraints = [
+            models.UniqueConstraint(fields=["is_primary"], condition=models.Q(is_primary=True), name="unique_active_primary_key")
+        ]
 
     def save(self, *args, **kwargs):
         if not self.key_code:
@@ -64,3 +67,7 @@ class KeyActivityLog(models.Model):
     class Meta:
         db_table = "key_activity_log"
         ordering = ("-created_at",)
+        indexes = [
+            models.Index(fields=["key"]),
+            models.Index(fields=["created_at"]),
+        ]

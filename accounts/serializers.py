@@ -26,6 +26,16 @@ class UserSerializer(serializers.ModelSerializer):
         model = User
         fields = (
             "id", "email", "username", "first_name", "middle_name", "last_name", "full_name", "role",
+            "status", "contact_number", "address", "is_active", "is_staff", "last_login_at",
+            "created_at", "updated_at", "applicant_profile", "evaluator_profile",
+        )
+        read_only_fields = ("id", "role", "status", "is_active", "is_staff", "last_login_at", "created_at", "updated_at")
+
+
+class AdminUserSerializer(UserSerializer):
+    class Meta(UserSerializer.Meta):
+        fields = (
+            "id", "email", "username", "first_name", "middle_name", "last_name", "full_name", "role",
             "status", "contact_number", "address", "is_active", "is_staff", "last_login_ip", "last_login_at",
             "created_at", "updated_at", "applicant_profile", "evaluator_profile",
         )
@@ -63,18 +73,20 @@ class AdminCreateEvaluatorSerializer(serializers.ModelSerializer):
 
 
 class LoginSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    email = serializers.CharField()
     password = serializers.CharField(write_only=True)
+    portal = serializers.CharField(required=False, allow_blank=True)
+    role = serializers.CharField(required=False, allow_blank=True)
 
 
 class VerifyOTPSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    email = serializers.CharField()
     purpose = serializers.ChoiceField(choices=OTPCode.Purpose.choices)
     otp_code = serializers.CharField(min_length=6, max_length=6)
 
 
 class ResendOTPSerializer(serializers.Serializer):
-    email = serializers.EmailField()
+    email = serializers.CharField()
     purpose = serializers.ChoiceField(choices=OTPCode.Purpose.choices)
 
 

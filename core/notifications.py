@@ -1,4 +1,6 @@
 def create_notification(recipient, title, message, notification_type="", related_case=None, role_visibility=""):
+    if not recipient:
+        return None
     from notifications.models import Notification
 
     return Notification.objects.create(

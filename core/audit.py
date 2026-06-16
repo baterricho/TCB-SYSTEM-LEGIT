@@ -1,8 +1,15 @@
+from django.conf import settings
+
 def get_client_ip(request):
-    forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR") if request else None
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.META.get("REMOTE_ADDR") if request else ""
+    if not request:
+        return ""
+    remote_addr = request.META.get("REMOTE_ADDR", "")
+    trusted_proxies = getattr(settings, "TRUSTED_PROXY_IPS", [])
+    if remote_addr in trusted_proxies:
+        forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR", "")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+    return remote_addr
 
 
 def create_audit_log(request=None, user=None, action="", record="", details="", related_case=None, target=""):

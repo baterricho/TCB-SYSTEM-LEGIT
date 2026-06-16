@@ -1,4 +1,5 @@
-from django.utils import timezone
+from django.shortcuts import get_object_or_404
+from django.db.models import Q
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -18,13 +19,19 @@ from .serializers import (
     CaseStatusUpdateSerializer,
     EvaluationSubmitSerializer,
 )
-from .services import CaseWorkflowService, evaluator_matches_case
+from .services import CaseWorkflowService, ensure_cases_for_submitted_applications, evaluator_matches_case
 
 
 class CaseViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CaseSerializer
     filterset_fields = ("status", "is_taken", "application__ip_type")
     search_fields = ("case_number", "application__application_code", "application__title", "applicant__email", "taken_by__email")
+
+    def _paginated_response(self, queryset_or_list, serializer_class=CaseSerializer):
+        page = self.paginate_queryset(queryset_or_list)
+        if page is not None:
+            return self.get_paginated_response(serializer_class(page, many=True).data)
+        return Response(serializer_class(queryset_or_list, many=True).data)
 
     def get_queryset(self):
         user = self.request.user
@@ -39,20 +46,40 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
 
     def _get_case_any_for_evaluator_action(self):
         if self.request.user.role == CustomUser.Role.ADMIN:
-            return Case.objects.get(pk=self.kwargs["pk"])
+            return get_object_or_404(Case, pk=self.kwargs["pk"])
         if self.action == "take_case":
-            return Case.objects.get(pk=self.kwargs["pk"])
+            return get_object_or_404(Case, pk=self.kwargs["pk"])
         return self.get_object()
 
     @action(detail=False, methods=["get"], url_path="available")
     def list_available_cases(self, request):
         if request.user.role != CustomUser.Role.EVALUATOR:
             raise PermissionDenied("Only evaluators can view available cases.")
+        ensure_cases_for_submitted_applications()
+        try:
+            profile = request.user.evaluator_profile
+        except CustomUser.evaluator_profile.RelatedObjectDoesNotExist:
+            return Response(
+                {"detail": "No evaluator profile found for this account.", "code": "no_profile"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        if not profile.is_available:
+            return Response(
+                {"detail": "Your evaluator profile is currently set to unavailable.", "code": "unavailable"},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         cases = [
-            case for case in Case.objects.select_related("application", "applicant").filter(is_taken=False, status=Case.Status.PENDING)
+            case for case in Case.objects.select_related("application", "applicant", "assigned_evaluator")
+            .filter(
+                Q(assigned_evaluator__isnull=True) | Q(assigned_evaluator=request.user),
+                application__status="submitted",
+                is_taken=False,
+                taken_by__isnull=True,
+                status=Case.Status.PENDING,
+            )
             if evaluator_matches_case(request.user, case)
         ]
-        return Response(CaseSerializer(cases, many=True).data)
+        return self._paginated_response(cases)
 
     @action(detail=False, methods=["get"], url_path="my-cases")
     def my_cases(self, request):
@@ -64,11 +91,11 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
             qs = Case.objects.all().select_related("application", "applicant", "taken_by")
         else:
             qs = Case.objects.none()
-        return Response(CaseSerializer(qs, many=True).data)
+        return self._paginated_response(qs)
 
     @action(detail=True, methods=["post"], url_path="take")
     def take_case(self, request, pk=None):
-        case = Case.objects.get(pk=pk)
+        case = get_object_or_404(Case, pk=pk)
         case = CaseWorkflowService.take_case(case, request.user, request)
         return Response({
             "detail": "Case Taken Successfully. You have taken this case.",
@@ -77,7 +104,7 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="update-status")
     def update_case_status(self, request, pk=None):
-        case = Case.objects.get(pk=pk)
+        case = get_object_or_404(Case, pk=pk)
         serializer = CaseStatusUpdateSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         case = CaseWorkflowService.update_status(
@@ -89,9 +116,9 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
         )
         return Response(CaseSerializer(case).data)
 
-    @action(detail=True, methods=["post"], url_path="submit-evaluation")
-    def submit_evaluation(self, request, pk=None):
-        case = Case.objects.get(pk=pk)
+    @action(detail=True, methods=["post"], url_path="evaluation")
+    def create_evaluation(self, request, pk=None):
+        case = get_object_or_404(Case, pk=pk)
         serializer = EvaluationSubmitSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         evaluation = CaseWorkflowService.submit_evaluation(
@@ -102,6 +129,17 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
             request,
         )
         return Response(CaseEvaluationSerializer(evaluation).data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["get"], url_path="payments")
+    def list_payments(self, request, pk=None):
+        case = self.get_object()
+        from payments.serializers import PaymentSerializer
+
+        qs = case.payments.select_related("assessment", "applicant", "verified_by", "encryption_key").all()
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            return self.get_paginated_response(PaymentSerializer(page, many=True).data)
+        return Response(PaymentSerializer(qs, many=True).data)
 
     @action(detail=True, methods=["post"], url_path="set-deadline")
     def set_deadline(self, request, pk=None):
@@ -125,9 +163,14 @@ class CaseViewSet(viewsets.ReadOnlyModelViewSet):
         if not case.is_taken:
             return Response({"detail": "No evaluator has taken this case yet.", "results": []})
         if request.user.role == CustomUser.Role.APPLICANT:
-            qs = case.activity_timeline.filter(role_visibility=ActivityTimeline.RoleVisibility.APPLICANT)
+            qs = case.activity_timeline.filter(role_visibility__in=[ActivityTimeline.RoleVisibility.APPLICANT, ActivityTimeline.RoleVisibility.ALL])
         elif request.user.role == CustomUser.Role.ADMIN:
-            qs = case.activity_timeline.filter(role_visibility=ActivityTimeline.RoleVisibility.ADMIN)
+            qs = case.activity_timeline.filter(role_visibility__in=[ActivityTimeline.RoleVisibility.ADMIN, ActivityTimeline.RoleVisibility.ALL])
+        elif request.user.role == CustomUser.Role.EVALUATOR and case.taken_by_id == request.user.id:
+            qs = case.activity_timeline.filter(role_visibility__in=[ActivityTimeline.RoleVisibility.ADMIN, ActivityTimeline.RoleVisibility.ALL])
         else:
             qs = case.activity_timeline.none()
+        page = self.paginate_queryset(qs)
+        if page is not None:
+            return self.get_paginated_response(ActivityTimelineSerializer(page, many=True).data)
         return Response(ActivityTimelineSerializer(qs, many=True).data)

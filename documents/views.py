@@ -1,5 +1,7 @@
 from django.http import HttpResponse
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
+from django.utils.http import content_disposition_header
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -38,7 +40,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         case = None
         if serializer.validated_data.get("case"):
-            case = Case.objects.get(pk=serializer.validated_data["case"])
+            case = get_object_or_404(Case, pk=serializer.validated_data["case"])
         document = DocumentService.upload(
             uploaded_file=serializer.validated_data["file"],
             uploaded_by=request.user,
@@ -53,7 +55,7 @@ class DocumentViewSet(viewsets.ModelViewSet):
         document = self.get_object()
         plaintext = DocumentService.decrypt(document, request.user, request)
         response = HttpResponse(plaintext, content_type=document.mime_type)
-        response["Content-Disposition"] = f'attachment; filename="{document.original_filename}"'
+        response["Content-Disposition"] = content_disposition_header(True, document.original_filename)
         response["Content-Length"] = len(plaintext)
         return response
 

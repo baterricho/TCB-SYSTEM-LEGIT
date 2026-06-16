@@ -20,6 +20,13 @@ class NotificationViewSet(viewsets.ReadOnlyModelViewSet):
         notification.save(update_fields=["is_read"])
         return Response(NotificationSerializer(notification).data)
 
+    @action(detail=True, methods=["patch"], url_path="read")
+    def read(self, request, pk=None):
+        notification = self.get_object()
+        notification.is_read = True
+        notification.save(update_fields=["is_read"])
+        return Response(NotificationSerializer(notification).data)
+
     @action(detail=False, methods=["post"], url_path="clear")
     def clear_own_notifications(self, request):
         Notification.objects.filter(recipient=request.user).delete()

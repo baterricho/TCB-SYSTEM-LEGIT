@@ -31,10 +31,26 @@ def create_user(email, role="applicant", password="StrongPass123!", **extra):
     return CustomUser.objects.create_user(email=email, password=password, role=role, **defaults)
 
 
-@override_settings(EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend", MASTER_KEY=TEST_MASTER_KEY)
+@override_settings(
+    EMAIL_BACKEND="django.core.mail.backends.locmem.EmailBackend",
+    MASTER_KEY=TEST_MASTER_KEY,
+    REST_FRAMEWORK={"DEFAULT_THROTTLE_CLASSES": [], "DEFAULT_THROTTLE_RATES": {}}
+)
 class SecurityRulesTests(TestCase):
     def setUp(self):
         self.client = APIClient()
+        from unittest.mock import patch
+        from rest_framework.throttling import SimpleRateThrottle
+        self.patcher = patch.dict(SimpleRateThrottle.THROTTLE_RATES, {
+            "auth": "10000/min",
+            "otp": "10000/min",
+            "registration": "10000/min",
+            "password_reset": "10000/min",
+        })
+        self.patcher.start()
+
+    def tearDown(self):
+        self.patcher.stop()
 
     def test_otp_is_hashed_expires_and_does_not_accept_random_code(self):
         user = create_user("otp@example.com")
@@ -118,7 +134,7 @@ class SecurityRulesTests(TestCase):
                     declaration_accepted=True,
                 )
                 case = Case.objects.create(application=application, applicant=applicant)
-                upload = SimpleUploadedFile("module.pdf", b"confidential-ip-content", content_type="application/pdf")
+                upload = SimpleUploadedFile("module.pdf", b"%PDF-1.4\nconfidential-ip-content", content_type="application/pdf")
                 document = DocumentService.upload(
                     uploaded_file=upload,
                     uploaded_by=applicant,
@@ -126,5 +142,5 @@ class SecurityRulesTests(TestCase):
                     case=case,
                 )
                 with document.encrypted_file_path.open("rb") as encrypted_file:
-                    self.assertNotEqual(encrypted_file.read(), b"confidential-ip-content")
-                self.assertEqual(DocumentService.decrypt(document, applicant), b"confidential-ip-content")
+                    self.assertNotEqual(encrypted_file.read(), b"%PDF-1.4\nconfidential-ip-content")
+                self.assertEqual(DocumentService.decrypt(document, applicant), b"%PDF-1.4\nconfidential-ip-content")

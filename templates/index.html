@@ -10,7 +10,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700;9..144,800;9..144,900&family=Inter:wght@300;400;500;600;700;800;900&family=Manrope:wght@300;400;500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css" integrity="sha512-DTOQO9RWCH3ppGqcWaEA1BIZOC6xxalwEsw9c2QQeAIftl+Vegovlnee1c9QX4TctnWMn13TZye+giMm8e2LwA==" crossorigin="anonymous" referrerpolicy="no-referrer" />
-  <link rel="stylesheet" href="{% static 'css/styles.css' %}?v=8" />
+  <link rel="stylesheet" href="{% static 'css/styles.css' %}?v=10" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 </head>
 <body>
@@ -392,10 +392,10 @@
           </div>
           <form id="loginForm" onsubmit="handleLogin(event)">
             <div class="form-group">
-              <label for="loginEmail">Email Address</label>
+              <label for="loginEmail">Email or Username</label>
               <div class="input-icon">
                 <i class="fa-solid fa-envelope"></i>
-                <input type="email" id="loginEmail" placeholder="Personal email" />
+                <input type="text" id="loginEmail" placeholder="Email or username" />
               </div>
               <span class="error-msg" id="loginEmailError"></span>
             </div>
@@ -434,7 +434,7 @@
             </div>
             <div class="login-otp-demo-note">
               <i class="fa-solid fa-circle-info"></i>
-              <span>Use the OTP sent by the backend to complete this login.</span>
+              <span>OTP verification is required to complete this login.</span>
             </div>
             <div class="login-otp-actions">
               <button type="submit" class="btn btn-primary btn-block" id="loginOtpVerifyBtn">
@@ -663,7 +663,7 @@
               </div>
               <h3 style="margin-bottom:8px;">Verify Your Email</h3>
               <p style="font-size:.9rem; color:var(--gray-500);">We sent a 6-digit code to <br><strong id="displayRegEmail" style="color:var(--navy);"></strong></p>
-              <p id="signupOtpHint" style="display:none; color:var(--gold-dark); font-size:0.85rem; margin-top:12px; font-weight:800;">Prototype OTP: <strong id="displaySignupOtp"></strong></p>
+              <p id="signupOtpHint" style="display:none; color:var(--gold-dark); font-size:0.85rem; margin-top:12px; font-weight:800;">OTP delivery status: <strong id="displaySignupOtp"></strong></p>
             </div>
             
             <div class="otp-inputs" style="display:flex; justify-content:center; gap:10px; margin-bottom:24px;">
@@ -769,6 +769,6 @@
     window.TCB_API_BASE_URL = "/api";
     window.TCB_STATIC_URL = "{% static '' %}";
   </script>
-  <script src="{% static 'js/app.js' %}?v=70"></script>
+  <script src="{% static 'js/app.js' %}?v=75"></script>
 </body>
 </html>

@@ -1,8 +1,9 @@
 import re
-from datetime import datetime
+from datetime import datetime, time
 
 from django.conf import settings
 from django.db import transaction
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from accounts.models import CustomUser
@@ -19,7 +20,7 @@ UNMATCHED_MESSAGE = "IPOPHL email received but no matching case record was found
 def sender_is_allowed(sender):
     domain = sender.split("@")[-1].lower()
     allowed_senders = {email.lower() for email in settings.IPOPHL_ALLOWED_SENDERS if email}
-    allowed_domains = {domain.lower() for domain in settings.IPOPHL_ALLOWED_DOMAINS if domain}
+    allowed_domains = {d.lower() for d in settings.IPOPHL_ALLOWED_DOMAINS if d}
     return sender.lower() in allowed_senders or domain in allowed_domains
 
 
@@ -87,7 +88,10 @@ class IPOPHLEmailParserService:
             create_audit_log(request, user, "ipophl_email.unmatched", subject, UNMATCHED_MESSAGE)
             return parse, UNMATCHED_MESSAGE
         if deadline:
-            matched_case.sla_due_date = deadline
+            matched_case.sla_due_date = timezone.make_aware(
+                datetime.combine(deadline, time.min),
+                timezone.get_current_timezone(),
+            )
             matched_case.save(update_fields=["sla_due_date", "updated_at"])
         if matched_case.is_taken:
             ActivityTimeline.objects.create(

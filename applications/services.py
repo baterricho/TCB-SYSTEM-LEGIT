@@ -77,12 +77,16 @@ class CompletenessService:
         if item_name == "Abstract":
             return ApplicationChecklist.Status.COMPLETE if application.abstract else ApplicationChecklist.Status.MISSING
         if item_name == "Drawings":
-            has_drawings = hasattr(application, "case") and application.case.documents.filter(document_type__icontains="drawing").exists()
+            try:
+                has_drawings = application.case.documents.filter(document_type__icontains="drawing").exists()
+            except Exception:
+                has_drawings = False
             return ApplicationChecklist.Status.COMPLETE if has_drawings else ApplicationChecklist.Status.NEEDS_REVIEW
         if item_name == "Supporting Documents":
-            if hasattr(application, "case"):
+            try:
                 return ApplicationChecklist.Status.COMPLETE if application.case.documents.exists() else ApplicationChecklist.Status.MISSING
-            return ApplicationChecklist.Status.OPTIONAL
+            except Exception:
+                return ApplicationChecklist.Status.OPTIONAL
         if item_name == "Payment Proof if applicable":
             return ApplicationChecklist.Status.OPTIONAL
         if item_name == "Declaration":
@@ -122,26 +126,45 @@ class CompletenessService:
 
 class ApplicationSubmissionService:
     @staticmethod
-    @transaction.atomic
-    def submit(application, request=None):
-        if application.status == IPApplication.Status.SUBMITTED:
-            raise ValidationError("This application has already been submitted.")
-        CompletenessService.ensure_submittable(application)
-        application.status = IPApplication.Status.SUBMITTED
-        application.submitted_at = timezone.now()
-        application.save(update_fields=["status", "submitted_at"])
+    def ensure_case(application):
         from cases.models import Case
 
-        case = Case.objects.create(application=application, applicant=application.applicant)
-        admins = application.applicant.__class__.objects.filter(role="admin", status="active")
-        for admin in admins:
-            create_notification(
-                admin,
-                "New Application Submitted",
-                f"Application {application.application_code} was submitted and Case #{case.case_number} was created.",
-                "application_submitted",
-                case,
-                "admin",
-            )
-        create_audit_log(request, application.applicant, "application.submitted", application.application_code, f"Case {case.case_number} created.", related_case=case)
-        return case
+        return Case.objects.get_or_create(
+            application=application,
+            defaults={
+                "applicant": application.applicant,
+                "status": Case.Status.PENDING,
+                "is_taken": False,
+                "taken_by": None,
+                "assigned_evaluator": None,
+                "taken_at": None,
+                "deadline": None,
+                "priority_score": 0,
+                "priority_label": Case.PriorityLabel.NORMAL,
+            },
+        )
+
+    @staticmethod
+    @transaction.atomic
+    def submit(application, request=None):
+        was_already_submitted = application.status == IPApplication.Status.SUBMITTED
+        if not was_already_submitted:
+            CompletenessService.ensure_submittable(application)
+            application.status = IPApplication.Status.SUBMITTED
+            application.submitted_at = timezone.now()
+            application.save(update_fields=["status", "submitted_at"])
+
+        case, created = ApplicationSubmissionService.ensure_case(application)
+        if created:
+            admins = application.applicant.__class__.objects.filter(role="admin", status="active")
+            for admin in admins:
+                create_notification(
+                    admin,
+                    "New Application Submitted",
+                    f"Application {application.application_code} was submitted and Case #{case.case_number} was created.",
+                    "application_submitted",
+                    case,
+                    "admin",
+                )
+            create_audit_log(request, application.applicant, "application.submitted", application.application_code, f"Case {case.case_number} created.", related_case=case)
+        return case, created

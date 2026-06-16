@@ -1,3 +1,8 @@
+import hashlib
+from django.core.files.base import ContentFile
+from django.utils.text import get_valid_filename
+from security_keys.services import AESGCMDocumentCipher
+
 from django.db import transaction
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
@@ -37,18 +42,26 @@ class MessagingService:
         message = Message.objects.create(conversation=conversation, sender=sender, content=content, has_attachment=bool(files))
         for uploaded_file in files or []:
             mime_type = validate_message_attachment(uploaded_file)
-            MessageAttachment.objects.create(
+            plaintext = uploaded_file.read()
+            key_record, nonce, ciphertext = AESGCMDocumentCipher.encrypt(plaintext)
+
+            # Save the encrypted content
+            encrypted_file = ContentFile(ciphertext)
+            filename = get_valid_filename(uploaded_file.name)
+            encrypted_name = f"{hashlib.sha256(ciphertext).hexdigest()}-{filename}"
+
+            attachment = MessageAttachment(
                 message=message,
-                file_path=uploaded_file,
-                original_filename=uploaded_file.name,
+                original_filename=filename,
                 file_size=uploaded_file.size,
                 mime_type=mime_type,
+                encryption_key=key_record,
+                nonce=nonce,
+                is_encrypted=True,
             )
-        recipient = conversation.evaluator if sender_id_matches(sender, conversation.applicant_id) else conversation.applicant
+            attachment.file_path.save(encrypted_name, encrypted_file, save=True)
+
+        recipient = conversation.evaluator if sender.id == conversation.applicant_id else conversation.applicant
         create_notification(recipient, "New Case Message", f"You have a new message for Case #{conversation.case.case_number}.", "message", conversation.case, recipient.role)
         create_audit_log(request, sender, "message.sent", conversation.case.case_number, "Message sent.", related_case=conversation.case)
         return message
-
-
-def sender_id_matches(sender, user_id):
-    return sender.id == user_id

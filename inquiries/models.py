@@ -27,7 +27,6 @@ class Inquiry(models.Model):
         db_table = "inquiry"
         ordering = ("-created_at",)
         indexes = [
-            models.Index(fields=["inquiry_code"]),
             models.Index(fields=["user"]),
             models.Index(fields=["listing"]),
             models.Index(fields=["category"]),
@@ -37,10 +36,24 @@ class Inquiry(models.Model):
 
     def save(self, *args, **kwargs):
         if not self.inquiry_code:
+            from django.db import transaction, IntegrityError
+            import uuid
+
             year = timezone.now().year
-            next_number = Inquiry.objects.filter(created_at__year=year).count() + 1
-            self.inquiry_code = f"INQ-{year}-{next_number:03d}"
-        super().save(*args, **kwargs)
+            for attempt in range(10):
+                try:
+                    with transaction.atomic():
+                        next_number = Inquiry.objects.filter(created_at__year=year).count() + 1
+                        self.inquiry_code = f"INQ-{year}-{next_number:05d}"
+                        super().save(*args, **kwargs)
+                        return
+                except IntegrityError:
+                    if attempt == 9:
+                        self.inquiry_code = f"INQ-{year}-{uuid.uuid4().hex[:8].upper()}"
+                        super().save(*args, **kwargs)
+                        return
+        else:
+            super().save(*args, **kwargs)
 
     def __str__(self):
         return self.subject

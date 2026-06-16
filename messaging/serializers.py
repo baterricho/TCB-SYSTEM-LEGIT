@@ -4,10 +4,21 @@ from .models import Conversation, Message, MessageAttachment
 
 
 class MessageAttachmentSerializer(serializers.ModelSerializer):
+    file_path = serializers.SerializerMethodField()
+
     class Meta:
         model = MessageAttachment
         fields = ("id", "original_filename", "file_size", "mime_type", "file_path", "uploaded_at")
         read_only_fields = fields
+
+    def get_file_path(self, obj):
+        request = self.context.get("request")
+        url = f"/api/messaging/attachments/{obj.id}/download/"
+        if request:
+            if "/api/v1/" in request.path:
+                url = f"/api/v1/messaging/attachments/{obj.id}/download/"
+            return request.build_absolute_uri(url)
+        return url
 
 
 class MessageSerializer(serializers.ModelSerializer):

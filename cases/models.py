@@ -63,7 +63,7 @@ class Case(models.Model):
 
 class CaseStatusHistory(models.Model):
     id = models.BigAutoField(primary_key=True, db_column="status_history_id")
-    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="status_history", db_column="case_id")
+    case = models.ForeignKey(Case, on_delete=models.PROTECT, related_name="status_history", db_column="case_id")
     previous_status = models.CharField(max_length=30, blank=True)
     new_status = models.CharField(max_length=30)
     changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, db_column="changed_by_id")
@@ -73,6 +73,9 @@ class CaseStatusHistory(models.Model):
     class Meta:
         db_table = "case_status_history"
         ordering = ("-changed_at",)
+        indexes = [
+            models.Index(fields=["case", "-changed_at"]),
+        ]
 
 
 class ActivityTimeline(models.Model):
@@ -82,7 +85,7 @@ class ActivityTimeline(models.Model):
         ALL = "all", "All"
 
     id = models.BigAutoField(primary_key=True, db_column="timeline_id")
-    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="activity_timeline", db_column="case_id")
+    case = models.ForeignKey(Case, on_delete=models.SET_NULL, null=True, blank=True, related_name="activity_timeline", db_column="case_id")
     performed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, db_column="performed_by_id")
     role_visibility = models.CharField(max_length=20, choices=RoleVisibility.choices)
     action = models.CharField(max_length=255)
@@ -93,10 +96,13 @@ class ActivityTimeline(models.Model):
     class Meta:
         db_table = "activity_timeline"
         ordering = ("created_at",)
+        indexes = [
+            models.Index(fields=["case", "role_visibility"]),
+        ]
 
 
 class CaseEvaluation(models.Model):
-    case = models.ForeignKey(Case, on_delete=models.CASCADE, related_name="evaluations", db_column="case_id")
+    case = models.ForeignKey(Case, on_delete=models.PROTECT, related_name="evaluations", db_column="case_id")
     evaluator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="case_evaluations", db_column="evaluator_id")
     content = models.TextField()
     recommendation = models.TextField(blank=True)
@@ -105,4 +111,5 @@ class CaseEvaluation(models.Model):
 
     class Meta:
         db_table = "case_evaluation"
+        unique_together = [("case", "evaluator")]
         ordering = ("-created_at",)

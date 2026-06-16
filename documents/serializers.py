@@ -4,7 +4,7 @@ from .models import Document
 
 
 class DocumentSerializer(serializers.ModelSerializer):
-    encryption_key_code = serializers.CharField(source="encryption_key.key_code", read_only=True)
+    encryption_key_code = serializers.CharField(source="encryption_key.key_code", read_only=True, default="")
 
     class Meta:
         model = Document

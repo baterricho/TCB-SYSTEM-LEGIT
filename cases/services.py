@@ -16,15 +16,49 @@ from .models import ActivityTimeline, Case, CaseEvaluation, CaseStatusHistory
 STATUS_LABELS = dict(Case.Status.choices)
 
 
+def ensure_cases_for_submitted_applications():
+    from applications.models import IPApplication
+
+    submitted_without_cases = (
+        IPApplication.objects
+        .filter(status=IPApplication.Status.SUBMITTED, case__isnull=True)
+        .select_related("applicant")[:500]
+    )
+    created_cases = []
+    for application in submitted_without_cases:
+        case, created = Case.objects.get_or_create(
+            application=application,
+            defaults={
+                "applicant": application.applicant,
+                "status": Case.Status.PENDING,
+                "is_taken": False,
+                "taken_by": None,
+                "assigned_evaluator": None,
+                "taken_at": None,
+                "deadline": None,
+                "priority_score": 0,
+                "priority_label": Case.PriorityLabel.NORMAL,
+            },
+        )
+        if created:
+            created_cases.append(case)
+    return created_cases
+
+
 def evaluator_matches_case(evaluator, case):
     try:
         profile = evaluator.evaluator_profile
     except EvaluatorProfile.DoesNotExist:
         return False
-    specialization = profile.specialization.lower()
+    specialization = profile.specialization.lower().replace("_", " ")
     ip_type = case.application.ip_type.lower().replace("_", " ")
-    ip_label = case.application.get_ip_type_display().lower()
-    return profile.is_available and ("all" in specialization or "general" in specialization or ip_type in specialization or ip_label in specialization)
+    ip_label = case.application.get_ip_type_display().lower().replace("_", " ")
+    return profile.is_available and (
+        "all" in specialization
+        or "general" in specialization
+        or ip_type in specialization
+        or ip_label in specialization
+    )
 
 
 def evaluator_display_name(user):
@@ -37,8 +71,9 @@ class CaseWorkflowService:
     def take_case(case, evaluator, request=None):
         if evaluator.role != CustomUser.Role.EVALUATOR:
             raise PermissionDenied("Only evaluators can take cases.")
+        admin_users = list(CustomUser.objects.filter(role=CustomUser.Role.ADMIN, status=CustomUser.Status.ACTIVE))
         case = Case.objects.select_for_update().select_related("application", "applicant").get(pk=case.pk)
-        if case.is_taken:
+        if case.is_taken or case.taken_by_id:
             raise ValidationError("This case has already been taken.")
         if not evaluator_matches_case(evaluator, case):
             raise PermissionDenied("This case is outside your allowed specialization.")
@@ -52,7 +87,7 @@ class CaseWorkflowService:
         case.deadline = now + timedelta(days=90)
         case.sla_stage = "Evaluator Review"
         case.sla_due_date = case.deadline
-        case.save()
+        case.save(update_fields=["is_taken", "taken_by", "assigned_evaluator", "taken_at", "status", "deadline", "sla_stage", "sla_due_date"])
         EvaluatorProfile.objects.filter(user=evaluator).update(workload_count=evaluator.taken_cases.count())
         CaseStatusHistory.objects.create(
             case=case,
@@ -80,7 +115,7 @@ class CaseWorkflowService:
         )
         create_notification(evaluator, "Case Taken Successfully", "You have taken this case.", "case_taken", case, "evaluator")
         create_notification(case.applicant, "Case Accepted", f"Your case has been accepted by {name}.", "case_taken", case, "applicant")
-        for admin in CustomUser.objects.filter(role=CustomUser.Role.ADMIN, status=CustomUser.Status.ACTIVE):
+        for admin in admin_users:
             create_notification(admin, "Case Taken by Evaluator", f"{name} took Case #{case.case_number}.", "case_taken", case, "admin")
         create_audit_log(request, evaluator, "case.taken", case.case_number, f"{name} took this case.")
         return case
@@ -94,6 +129,7 @@ class CaseWorkflowService:
             raise ValidationError(f"This case is already marked as {STATUS_LABELS.get(new_status, new_status)}.")
         if new_status not in Case.Status.values:
             raise ValidationError("Invalid case status.")
+        admin_users = list(CustomUser.objects.filter(role=CustomUser.Role.ADMIN, status=CustomUser.Status.ACTIVE))
         previous_status = case.status
         case.status = new_status
         case.save(update_fields=["status", "updated_at"])
@@ -120,7 +156,7 @@ class CaseWorkflowService:
             performed_by=evaluator,
         )
         create_notification(case.applicant, "Case Status Updated", f"Your case status is now {label}.", "case_status", case, "applicant")
-        for admin in CustomUser.objects.filter(role=CustomUser.Role.ADMIN, status=CustomUser.Status.ACTIVE):
+        for admin in admin_users:
             create_notification(admin, "Case Status Updated", f"Case #{case.case_number} is now {label}.", "case_status", case, "admin")
         create_audit_log(request, evaluator, "case.status_updated", case.case_number, f"{previous_status} -> {new_status}. {remarks}")
         return case

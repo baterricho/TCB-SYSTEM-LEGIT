@@ -6,7 +6,7 @@ from decouple import Csv, config
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 
-SECRET_KEY = config("SECRET_KEY", default="unsafe-dev-secret-key-change-me")
+SECRET_KEY = config("SECRET_KEY")
 DEBUG = str(config("DEBUG", default="False")).lower() in {"1", "true", "yes", "on"}
 ALLOWED_HOSTS = config("ALLOWED_HOSTS", default="localhost,127.0.0.1", cast=Csv())
 
@@ -21,6 +21,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt.token_blacklist",
     "corsheaders",
     "django_filters",
+    "csp",
     "accounts",
     "applications",
     "cases",
@@ -41,12 +42,14 @@ INSTALLED_APPS = [
 MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "csp.middleware.CSPMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "core.middleware.DeprecateUnversionedApiMiddleware",
 ]
 
 ROOT_URLCONF = "config.urls"
@@ -69,15 +72,18 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "config.wsgi.application"
 
+DEFAULT_DB_CONN_MAX_AGE = 0 if DEBUG else 60
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": config("DB_NAME", default="tcb_backend"),
-        "USER": config("DB_USER", default="postgres"),
-        "PASSWORD": config("DB_PASSWORD", default="postgres"),
-        "HOST": config("DB_HOST", default="localhost"),
-        "PORT": config("DB_PORT", default="5432"),
-        "CONN_MAX_AGE": 60,
+        "NAME": config("DB_NAME"),
+        "USER": config("DB_USER"),
+        "PASSWORD": config("DB_PASSWORD"),
+        "HOST": config("DB_HOST"),
+        "PORT": config("DB_PORT"),
+        "CONN_MAX_AGE": config("DB_CONN_MAX_AGE", default=DEFAULT_DB_CONN_MAX_AGE, cast=int),
+        "CONN_HEALTH_CHECKS": True,
     }
 }
 
@@ -110,7 +116,7 @@ MEDIA_ROOT = BASE_DIR / "media"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 AUTH_USER_MODEL = "accounts.User"
 
-CORS_ALLOWED_ORIGINS = config("CORS_ALLOWED_ORIGINS", default="", cast=Csv())
+CORS_ALLOWED_ORIGINS = [origin for origin in config("CORS_ALLOWED_ORIGINS", default="", cast=Csv()) if origin]
 CORS_ALLOW_CREDENTIALS = True
 
 REST_FRAMEWORK = {
@@ -127,6 +133,15 @@ REST_FRAMEWORK = {
     ),
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 20,
+    "DEFAULT_THROTTLE_CLASSES": (
+        "rest_framework.throttling.ScopedRateThrottle",
+    ),
+    "DEFAULT_THROTTLE_RATES": {
+        "auth": "5/min",
+        "otp": "3/min",
+        "registration": "3/hour",
+        "password_reset": "3/hour",
+    },
 }
 
 SIMPLE_JWT = {
@@ -145,8 +160,9 @@ EMAIL_HOST_USER = config("EMAIL_HOST_USER", default="")
 EMAIL_HOST_PASSWORD = config("EMAIL_HOST_PASSWORD", default="")
 EMAIL_USE_TLS = True
 DEFAULT_FROM_EMAIL = config("DEFAULT_FROM_EMAIL", default="noreply@example.com")
+TCB_PRINT_OTP_TO_CONSOLE = config("TCB_PRINT_OTP_TO_CONSOLE", default=False, cast=bool)
 
-MASTER_KEY = config("MASTER_KEY", default="")
+MASTER_KEY = config("MASTER_KEY")
 IPOPHL_ALLOWED_DOMAINS = config("IPOPHL_ALLOWED_DOMAINS", default="ipophil.gov.ph,ipophl.gov.ph", cast=Csv())
 IPOPHL_ALLOWED_SENDERS = config("IPOPHL_ALLOWED_SENDERS", default="", cast=Csv())
 
@@ -157,3 +173,18 @@ FILE_UPLOAD_MAX_MEMORY_SIZE = MAX_UPLOAD_SIZE
 CSRF_COOKIE_HTTPONLY = True
 SESSION_COOKIE_HTTPONLY = True
 X_FRAME_OPTIONS = "DENY"
+
+# Content Security Policy (django-csp)
+CSP_DEFAULT_SRC = ("'self'",)
+CSP_SCRIPT_SRC = ("'self'",)
+CSP_STYLE_SRC = ("'self'", "'unsafe-inline'")
+CSP_IMG_SRC = ("'self'", "data:", "blob:")
+CSP_FONT_SRC = ("'self'",)
+CSP_CONNECT_SRC = ("'self'",)
+CSP_FRAME_ANCESTORS = ("'none'",)
+CSP_OBJECT_SRC = ("'none'",)
+CSP_BASE_URI = ("'self'",)
+CSP_FORM_ACTION = ("'self'",)
+CSP_REPORT_ONLY = True
+
+TRUSTED_PROXY_IPS = config("TRUSTED_PROXY_IPS", default="", cast=lambda v: [s.strip() for s in v.split(",") if s.strip()])

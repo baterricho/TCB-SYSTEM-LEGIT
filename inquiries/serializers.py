@@ -10,7 +10,7 @@ class InquirySerializer(serializers.ModelSerializer):
             "id", "inquiry_code", "user", "listing", "sender_name", "email", "category", "subject",
             "message", "popularity_count", "status", "created_at", "updated_at",
         )
-        read_only_fields = ("id", "inquiry_code", "popularity_count", "created_at", "updated_at")
+        read_only_fields = ("id", "inquiry_code", "user", "popularity_count", "created_at", "updated_at")
 
 
 class InquiryAdminUpdateSerializer(serializers.ModelSerializer):

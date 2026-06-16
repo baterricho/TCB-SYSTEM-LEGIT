@@ -10,11 +10,18 @@ class FeeAssessmentSerializer(serializers.ModelSerializer):
             "id", "case", "application", "evaluator", "amount", "fee_type",
             "description", "status", "issued_at", "created_at", "updated_at",
         )
-        read_only_fields = ("id", "evaluator", "issued_at", "created_at", "updated_at")
+        read_only_fields = ("id", "evaluator", "status", "amount", "issued_at", "created_at", "updated_at")
+
+    def validate(self, attrs):
+        case = attrs.get("case") or getattr(self.instance, "case", None)
+        application = attrs.get("application") or getattr(self.instance, "application", None)
+        if case and application and case.application_id != application.id:
+            raise serializers.ValidationError("Assessment application must match the selected case.")
+        return attrs
 
 
 class PaymentSerializer(serializers.ModelSerializer):
-    encryption_key_code = serializers.CharField(source="encryption_key.key_code", read_only=True)
+    encryption_key_code = serializers.CharField(source="encryption_key.key_code", read_only=True, default="")
 
     class Meta:
         model = Payment

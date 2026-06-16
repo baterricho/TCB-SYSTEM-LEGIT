@@ -11,7 +11,7 @@ class FeeAssessment(models.Model):
         CANCELLED = "cancelled", "Cancelled"
 
     id = models.BigAutoField(primary_key=True, db_column="assessment_id")
-    case = models.ForeignKey("cases.Case", on_delete=models.CASCADE, related_name="fee_assessments", db_column="case_id")
+    case = models.ForeignKey("cases.Case", on_delete=models.PROTECT, related_name="fee_assessments", db_column="case_id")
     application = models.ForeignKey("applications.IPApplication", on_delete=models.PROTECT, related_name="fee_assessments", db_column="application_id")
     evaluator = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True, related_name="issued_fee_assessments", db_column="evaluator_id")
     amount = models.DecimalField(max_digits=12, decimal_places=2)
@@ -44,7 +44,7 @@ class Payment(models.Model):
 
     id = models.BigAutoField(primary_key=True, db_column="payment_id")
     assessment = models.ForeignKey(FeeAssessment, on_delete=models.PROTECT, related_name="payments", db_column="assessment_id")
-    case = models.ForeignKey("cases.Case", on_delete=models.CASCADE, related_name="payments", db_column="case_id")
+    case = models.ForeignKey("cases.Case", on_delete=models.PROTECT, related_name="payments", db_column="case_id")
     applicant = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="payments", db_column="applicant_id")
     amount_paid = models.DecimalField(max_digits=12, decimal_places=2)
     payment_method = models.CharField(max_length=80)

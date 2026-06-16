@@ -4,7 +4,7 @@ from django.db import models
 
 class Document(models.Model):
     id = models.BigAutoField(primary_key=True, db_column="document_id")
-    case = models.ForeignKey("cases.Case", on_delete=models.CASCADE, related_name="documents", db_column="case_id")
+    case = models.ForeignKey("cases.Case", on_delete=models.PROTECT, related_name="documents", db_column="case_id")
     uploaded_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="uploaded_documents", db_column="uploaded_by_id")
     document_type = models.CharField(max_length=100)
     original_filename = models.CharField(max_length=255)
